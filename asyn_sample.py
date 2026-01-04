@@ -3,6 +3,7 @@ import os
 import datetime
 import time
 import sys
+import shutil
 
 script_path = os.path.abspath(__file__)
 sys.path.append(os.path.dirname(os.path.dirname(script_path)))
@@ -102,7 +103,7 @@ def main(_):
     sample_neg_prompt_embeds = neg_prompt_embed.repeat(config.sample.batch_size, 1, 1)
     autocast = accelerator.autocast
 
-    prompt_list = [config.prompt]
+    prompt_list = [config.prompt] if isinstance(config.prompt, str) else config.prompt
     if len(config.prompt_file) != 0:
         with open(config.prompt_file, 'r') as f:
             prompt_list = json.load(f)
@@ -110,8 +111,8 @@ def main(_):
     prompt_cnt = len(prompt_list)
     total_num_batches_per_epoch = config.sample.num_batches_per_epoch * prompt_cnt
 
-    item_idx_list = [config.item_idx] * prompt_cnt
-    item_k_list = [config.item_k] * prompt_cnt
+    item_idx_list = [config.item_idx] if isinstance(config.prompt, str) else config.item_idx
+    item_k_list = [config.item_k] if isinstance(config.prompt, str) else config.item_k
     if len(config.item_idx_file) != 0:
         with open(config.item_idx_file, 'r') as f:
             temp_list = json.load(f)
@@ -174,6 +175,7 @@ def main(_):
             disable=not accelerator.is_local_main_process,
             position=0,
     ):
+        seed_everything(config.seed)
         # generate prompts
         prompt_idx = idx // config.sample.num_batches_per_epoch
         prompts1 = [
@@ -486,8 +488,9 @@ def main(_):
             pil.save(os.path.join(save_dir, f"images/{(j + global_idx):05}_AsynDM.png"))
         global_idx += len(images)
         local_idx += len(images)
-        with open(os.path.join(save_dir, f'prompt.json'), 'w') as f:
-            json.dump(total_prompts1, f)
+    with open(os.path.join(save_dir, f'prompt.json'), 'w') as f:
+        json.dump(total_prompts1, f)
+    shutil.copy("config/config.py", save_dir)
 
 
 if __name__ == "__main__":

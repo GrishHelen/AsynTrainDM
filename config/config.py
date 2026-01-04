@@ -12,21 +12,45 @@ def get_config():
     # allow tf32 on Ampere GPUs, which can speed up training.
     config.allow_tf32 = True
     # sample path
-    config.save_path = "./data"
+    config.save_path = "../data"
     # exp name
-    config.exp_name = ""  # "test"
+    config.exp_name = "AsynDM, base setup"
     # gpu id
     config.dev_id = 0
     # prompt directly used
-    config.prompt = "a rabbit playing basketball"
+    config.prompt = [
+        "a rabbit playing basketball",
+        "a white car and a red sheep",
+        "a cartoon style illustration of a macaw skating",
+        "a photo of a gift box at the fireplace",
+        "a photo of a cute ostrich on the chair",
+        "a photo of a cute ostrich in the cave",
+        "a photo of an orange candle in the bathroom",
+        "a photo of an orange candle among the snowdrifts",
+        "a painting of an orange on the roof",
+    ]
     # prompt file
     config.prompt_file = ""
     # cross mask threshold
     config.mask_thr = 1.0
     # item idx in prompt
-    config.item_idx = [1, 3]  # [1,5,11][1,7,13][3,9][1,4][2,4]
+    config.item_idx = [
+        [1, 3],
+        [2, 6],
+        [6],
+        [5, 8],
+        [5, 8],
+        [5, 8],
+        [5, 8],
+        [5, 8],
+        [4, 7],
+    ]  # [1,5,11][1,7,13][3,9][1,4][2,4]
     # item k in prompt
-    config.item_k = [0.7, 0.7]
+    config.item_k = [
+        [0.7, 0.7], [0.7, 0.7], [0.7],
+        [0.7, 0.7], [0.7, 0.7], [0.7, 0.7],
+        [0.7, 0.7], [0.7, 0.7], [0.7, 0.7], [0.7, 0.7]
+    ]
     # use static or dynamic mask
     config.static_mask = 0
     # item idx file
@@ -43,7 +67,7 @@ def get_config():
     ###### Pretrained Model ######
     config.pretrained = pretrained = ml_collections.ConfigDict()
     # base model to load. either a path to a local directory, or a model name from the HuggingFace model hub.
-    pretrained.model = "path/to/your/sd2.1-base"  # or "stabilityai/stable-diffusion-2-1"
+    pretrained.model = "/home/ergrishina_2/.cache/huggingface/hub/models--Manojb--stable-diffusion-2-1-base/snapshots/repo/"  # "stabilityai/stable-diffusion-2-1" or "path/to/your/sd2.1-base"
 
     ###### Sampling ######
     config.sample = sample = ml_collections.ConfigDict()
