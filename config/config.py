@@ -12,7 +12,7 @@ def get_config():
     # allow tf32 on Ampere GPUs, which can speed up training.
     config.allow_tf32 = True
     # sample path
-    config.save_path = "../data"
+    config.save_path = "../results"
     # exp name
     config.exp_name = "AsynDM, base setup"
     # gpu id
@@ -22,12 +22,12 @@ def get_config():
         "a rabbit playing basketball",
         "a white car and a red sheep",
         "a cartoon style illustration of a macaw skating",
-        "a photo of a gift box at the fireplace",
-        "a photo of a cute ostrich on the chair",
-        "a photo of a cute ostrich in the cave",
-        "a photo of an orange candle in the bathroom",
-        "a photo of an orange candle among the snowdrifts",
-        "a painting of an orange on the roof",
+        # "a photo of a gift box at the fireplace",
+        # "a photo of a cute ostrich on the chair",
+        # "a photo of a cute ostrich in the cave",
+        # "a photo of an orange candle in the bathroom",
+        # "a photo of an orange candle among the snowdrifts",
+        # "a painting of an orange on the roof",
     ]
     # prompt file
     config.prompt_file = ""
@@ -38,18 +38,18 @@ def get_config():
         [1, 3],
         [2, 6],
         [6],
-        [5, 8],
-        [5, 8],
-        [5, 8],
-        [5, 8],
-        [5, 8],
-        [4, 7],
+        # [5, 8],
+        # [5, 8],
+        # [5, 8],
+        # [5, 8],
+        # [5, 8],
+        # [4, 7],
     ]  # [1,5,11][1,7,13][3,9][1,4][2,4]
     # item k in prompt
     config.item_k = [
         [0.7, 0.7], [0.7, 0.7], [0.7],
-        [0.7, 0.7], [0.7, 0.7], [0.7, 0.7],
-        [0.7, 0.7], [0.7, 0.7], [0.7, 0.7], [0.7, 0.7]
+        # [0.7, 0.7], [0.7, 0.7], [0.7, 0.7],
+        # [0.7, 0.7], [0.7, 0.7], [0.7, 0.7], [0.7, 0.7]
     ]
     # use static or dynamic mask
     config.static_mask = 0
@@ -85,5 +85,10 @@ def get_config():
     sample.num_batches_per_epoch = 1
     # whether use classifier-free guidance
     sample.cfg = True
+
+    ###### Heatmap Parameters ######
+    config.heatmap = heatmap = ml_collections.ConfigDict()
+    # visualize heatmaps for every k timesteps
+    heatmap.every_k = 5
 
     return config
