@@ -5,12 +5,17 @@ from functools import partial
 import tqdm
 from PIL import Image
 import numpy as np
+import matplotlib.pyplot as plt
 
 from diffusion.asyn_ddim_with_logprob import ddim_step_with_logprob, asyn_ddim_step_with_logprob, latents_decode
 from model.unet_2d_condition import unet_asyn_forward
 from .utils import get_item_idx_list, get_item_k_list, func_prev_linear, func_prev_binary
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
+
+
+def tensor_to_img(image):
+    return (image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
 
 
 def generate_asyn(config, accelerator, pipeline, idx, prompt_list, prompt_embeds1_combine, cross_mask=None):
@@ -56,6 +61,7 @@ def generate_asyn(config, accelerator, pipeline, idx, prompt_list, prompt_embeds
     extra_step_kwargs = pipeline.prepare_extra_step_kwargs(gs, config.sample.eta)
 
     latents_t = noise_latents1
+    latents_0_preds_history = {0: latents_t}  # {t: latents_0_pred}
 
     for i in tqdm(
             range(config.sample.num_steps),
@@ -112,6 +118,8 @@ def generate_asyn(config, accelerator, pipeline, idx, prompt_list, prompt_embeds
                                                                         latents_t,
                                                                         **extra_step_kwargs)
                 latents_t = latents_t_1
+                if config.heatmap.every_k > 0 and (i + 1) % config.heatmap.every_k == 0:
+                    latents_0_preds_history[i + 1] = latents_0
 
                 if not config.static_mask:
                     cross_mask = extra_inf['cross_mask']  # (bsize, width_height, item_idx)
@@ -136,8 +144,35 @@ def generate_asyn(config, accelerator, pipeline, idx, prompt_list, prompt_embeds
                 state_t = state_prev_t
 
     images = latents_decode(pipeline, latents_t, accelerator.device, prompt_embeds1_combine.dtype).cpu().detach()
-
     os.makedirs(os.path.join(save_dir, "images/"), exist_ok=True)
     for j, image in enumerate(images):
-        pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+        pil = Image.fromarray(tensor_to_img(image))
         pil.save(os.path.join(save_dir, f"images/{(j + global_idx):05}_AsynDM.png"))
+
+    images_pred_history = {
+        t: latents_decode(pipeline, latents_0_pred, accelerator.device, prompt_embeds1_combine.dtype).cpu().detach()
+        for t, latents_0_pred in latents_0_preds_history.items()}
+    os.makedirs(os.path.join(save_dir, "images_pred/"), exist_ok=True)
+    for j in range(len(images)):
+        fig, axs = plt.subplots(ncols=len(images_pred_history), figsize=(8 * len(images_pred_history), 8))
+        for ax, (t, images_pred) in zip(axs.flatten(), images_pred_history.items()):
+            ax.imshow(tensor_to_img(images_pred[j]))
+            ax.set_title(f't = {t}', fontsize=5 * len(images_pred_history) + 20)
+            ax.axis('off')
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, f"images_pred/{(j + global_idx):05}_AsynDM.png"), dpi=300,
+                    bbox_inches='tight')
+
+    if config.heatmap.every_k > 0:
+        os.makedirs(os.path.join(save_dir, "differences/"), exist_ok=True)
+        for j in range(len(images)):
+            fig, axs = plt.subplots(ncols=len(images_pred_history), figsize=(8 * len(images_pred_history), 8))
+            for ax, (t, images_pred) in zip(axs.flatten(), images_pred_history.items()):
+                diff = torch.abs(images_pred[j] - images[j])  # (c, w, h)
+                heatmap = ax.imshow(np.mean(tensor_to_img(diff), axis=2), cmap='viridis')
+                fig.colorbar(heatmap, ax=ax, orientation='vertical')
+                ax.set_title(f't = {t}', fontsize=5 * len(images_pred_history) + 20)
+                ax.axis('off')
+            plt.tight_layout()
+            plt.savefig(os.path.join(save_dir, f"differences/{(j + global_idx):05}_AsynDM.png"), dpi=300,
+                        bbox_inches='tight')
