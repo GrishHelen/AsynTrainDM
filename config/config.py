@@ -14,14 +14,14 @@ def get_config():
     # sample path
     config.save_path = "../results"
     # exp name
-    config.exp_name = "AsynDM, base setup"
+    config.exp_name = "AsynDM, test"
     # gpu id
     config.dev_id = 0
     # prompt directly used
     config.prompt = [
         "a rabbit playing basketball",
-        "a white car and a red sheep",
-        "a cartoon style illustration of a macaw skating",
+        # "a white car and a red sheep",
+        # "a cartoon style illustration of a macaw skating",
         # "a photo of a gift box at the fireplace",
         # "a photo of a cute ostrich on the chair",
         # "a photo of a cute ostrich in the cave",
@@ -36,8 +36,8 @@ def get_config():
     # item idx in prompt
     config.item_idx = [
         [1, 3],
-        [2, 6],
-        [6],
+        # [2, 6],
+        # [6],
         # [5, 8],
         # [5, 8],
         # [5, 8],
@@ -47,7 +47,7 @@ def get_config():
     ]  # [1,5,11][1,7,13][3,9][1,4][2,4]
     # item k in prompt
     config.item_k = [
-        [0.7, 0.7], [0.7, 0.7], [0.7],
+        [0.7, 0.7],  # [0.7, 0.7], [0.7],
         # [0.7, 0.7], [0.7, 0.7], [0.7, 0.7],
         # [0.7, 0.7], [0.7, 0.7], [0.7, 0.7], [0.7, 0.7]
     ]
@@ -79,7 +79,7 @@ def get_config():
     # classifier-free guidance weight. 1.0 is no guidance.
     sample.guidance_scale = 5.0
     # batch size (per GPU!) to use for sampling.
-    sample.batch_size = 8
+    sample.batch_size = 4
     # number of batches to sample per epoch. the total number of samples per epoch is `num_batches_per_epoch *
     # batch_size * num_gpus`.
     sample.num_batches_per_epoch = 1

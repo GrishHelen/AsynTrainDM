@@ -13,13 +13,13 @@ from .utils import get_item_idx_list, get_item_k_list, func_prev_linear, func_pr
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
 
-def generate_dm(config, accelerator, pipeline, idx, prompt_list, prompt_embeds1_combine):
+def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine):
     global_idx = idx * config.sample.batch_size
     autocast = accelerator.autocast
     prompt_idx = idx // config.sample.num_batches_per_epoch
     save_dir = accelerator.project_configuration.project_dir
-    item_idx_list = get_item_idx_list(config, prompt_list)
-    item_k_list = get_item_k_list(config, prompt_list)
+    item_idx_list = get_item_idx_list(config, prompt_idx)
+    item_k_list = get_item_k_list(config, prompt_idx)
 
     gs = [torch.Generator(device='cuda') for _ in range(config.sample.batch_size)]
     for i, g in enumerate(gs):
@@ -66,7 +66,7 @@ def generate_dm(config, accelerator, pipeline, idx, prompt_list, prompt_embeds1_
                                                           return_dict=False,
                                                           extra_input={
                                                               'used_layer_size': 16,
-                                                              'item_idx': item_idx_list[prompt_idx]
+                                                              'item_idx': item_idx_list
                                                           },
                                                           return_extra_inf=True,
                                                           )
@@ -89,7 +89,7 @@ def generate_dm(config, accelerator, pipeline, idx, prompt_list, prompt_embeds1_
     bsize, width_height, item_cnt = cross_mask.shape
     width = int(width_height ** 0.5)
     cross_mask = cross_mask.permute(0, 2, 1).reshape(bsize, item_cnt, width, width)
-    a_tensor = torch.tensor(item_k_list[prompt_idx], dtype=torch.float32,
+    a_tensor = torch.tensor(item_k_list, dtype=torch.float32,
                             device=cross_mask.device)  # shape: (item_cnt,)
     a_tensor = a_tensor.view(1, item_cnt, 1, 1)  # shape: (1, item_cnt, 1, 1)
     priority_masks = cross_mask * a_tensor  # (bsize, item_cnt, width, width)
@@ -113,12 +113,12 @@ def generate_dm(config, accelerator, pipeline, idx, prompt_list, prompt_embeds1_
         return cross_mask
 
 
-def generate_dm_concave(config, accelerator, pipeline, idx, prompt_list, prompt_embeds1_combine):
+def generate_dm_concave(config, accelerator, pipeline, idx, prompt_embeds1_combine):
     global_idx = idx * config.sample.batch_size
     autocast = accelerator.autocast
     prompt_idx = idx // config.sample.num_batches_per_epoch
     save_dir = accelerator.project_configuration.project_dir
-    item_k_list = get_item_k_list(config, prompt_list)
+    item_k_list = get_item_k_list(config, prompt_idx)
 
     gs = [torch.Generator(device='cuda') for _ in range(config.sample.batch_size)]
     for i, g in enumerate(gs):
@@ -133,7 +133,7 @@ def generate_dm_concave(config, accelerator, pipeline, idx, prompt_list, prompt_
         gs  ## generator
     )
 
-    max_k = max(item_k_list[prompt_idx])
+    max_k = max(item_k_list)
     initial_t = pipeline.scheduler.config.num_train_timesteps + pipeline.scheduler.config.steps_offset
     # print(max_k, initial_t)
     initial_t = torch.tensor(initial_t, device=accelerator.device, dtype=torch.float32)

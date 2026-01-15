@@ -145,16 +145,16 @@ def main(_):
         # ================================================================= #
         # base (DM)
         if config.generate_dm or config.static_mask:
-            cross_mask = generate_dm(config, accelerator, pipeline, idx, prompt_list, prompt_embeds1_combine)
+            cross_mask = generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine)
 
         # ================================================================= #
         # base2 (DM concave)
         if config.generate_dm_concave:
-            generate_dm_concave(config, accelerator, pipeline, idx, prompt_list, prompt_embeds1_combine)
+            generate_dm_concave(config, accelerator, pipeline, idx, prompt_embeds1_combine)
 
         # ================================================================= #
         # asyn
-        generate_asyn(config, accelerator, pipeline, idx, prompt_list, prompt_embeds1_combine, cross_mask)
+        generate_asyn(config, accelerator, pipeline, idx, prompt_embeds1_combine, cross_mask)
 
         global_idx += config.sample.batch_size
 

@@ -13,13 +13,13 @@ from .utils import get_item_idx_list, get_item_k_list, func_prev_linear, func_pr
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
 
-def generate_asyn(config, accelerator, pipeline, idx, prompt_list, prompt_embeds1_combine, cross_mask=None):
+def generate_asyn(config, accelerator, pipeline, idx, prompt_embeds1_combine, cross_mask=None):
     global_idx = idx * config.sample.batch_size
     autocast = accelerator.autocast
     prompt_idx = idx // config.sample.num_batches_per_epoch
     save_dir = accelerator.project_configuration.project_dir
-    item_idx_list = get_item_idx_list(config, prompt_list)
-    item_k_list = get_item_k_list(config, prompt_list)
+    item_idx_list = get_item_idx_list(config, prompt_idx)
+    item_k_list = get_item_k_list(config, prompt_idx)
 
     gs = [torch.Generator(device='cuda') for _ in range(config.sample.batch_size)]
     for i, g in enumerate(gs):
@@ -34,11 +34,11 @@ def generate_asyn(config, accelerator, pipeline, idx, prompt_list, prompt_embeds
         gs  ## generator
     )
 
-    item_cnt = len(item_idx_list[prompt_idx])
+    item_cnt = len(item_idx_list)
     if not config.static_mask:
         cross_mask = torch.zeros(config.sample.batch_size, item_cnt, 64, 64, dtype=torch.float32,
                                  device=accelerator.device)
-        cross_mask[:, np.array(item_idx_list[prompt_idx]).argmax()] = 1
+        cross_mask[:, np.array(item_idx_list).argmax()] = 1
     bg_mask = 1 - (cross_mask > 0.5).any(dim=1).float()
     initial_t = pipeline.scheduler.config.num_train_timesteps + pipeline.scheduler.config.steps_offset
     initial_t = torch.tensor(initial_t, device=accelerator.device, dtype=torch.float32)
@@ -48,7 +48,7 @@ def generate_asyn(config, accelerator, pipeline, idx, prompt_list, prompt_embeds
     for j in range(item_cnt):
         state_prev_t_binary.append(
             cross_mask[:, j] * func_prev_binary(config, pipeline,
-                                                state_t, config.sample.num_steps, k=item_k_list[prompt_idx][j]))
+                                                state_t, config.sample.num_steps, k=item_k_list[j]))
     state_prev_t_binary = torch.stack(state_prev_t_binary, dim=1).sum(dim=1)
     state_t = (bg_mask * state_prev_t_linear + state_prev_t_binary)
     # print(state_t)
@@ -81,7 +81,7 @@ def generate_asyn(config, accelerator, pipeline, idx, prompt_list, prompt_embeds
                     state_prev_t_binary.append(
                         cross_mask[:, j] * func_prev_binary(config, pipeline,
                                                             state_t, config.sample.num_steps - i - 1,
-                                                            k=item_k_list[prompt_idx][j]))
+                                                            k=item_k_list[j]))
                 state_prev_t_binary = torch.stack(state_prev_t_binary, dim=1).sum(dim=1)
                 state_prev_t = (bg_mask * state_prev_t_linear + state_prev_t_binary)
 
@@ -96,7 +96,7 @@ def generate_asyn(config, accelerator, pipeline, idx, prompt_list, prompt_embeds
                                                           return_dict=False,
                                                           extra_input={
                                                               'used_layer_size': 16,
-                                                              'item_idx': item_idx_list[prompt_idx]
+                                                              'item_idx': item_idx_list
                                                           },
                                                           return_extra_inf=True,
                                                           )
@@ -122,7 +122,7 @@ def generate_asyn(config, accelerator, pipeline, idx, prompt_list, prompt_embeds
                     bsize, width_height, item_cnt = cross_mask.shape
                     width = int(width_height ** 0.5)
                     cross_mask = cross_mask.permute(0, 2, 1).reshape(bsize, item_cnt, width, width)
-                    a_tensor = torch.tensor(item_k_list[prompt_idx], dtype=torch.float32,
+                    a_tensor = torch.tensor(item_k_list, dtype=torch.float32,
                                             device=cross_mask.device)  # shape: (item_cnt,)
                     a_tensor = a_tensor.view(1, item_cnt, 1, 1)  # shape: (1, item_cnt, 1, 1)
                     priority_masks = cross_mask * a_tensor  # (bsize, item_cnt, width, width)

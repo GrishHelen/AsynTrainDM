@@ -3,21 +3,21 @@ import numpy as np
 import json
 
 
-def get_item_idx_list(config, prompt_list):
-    item_idx_list = [config.item_idx] if isinstance(config.prompt, str) else config.item_idx
+def get_item_idx_list(config, prompt_idx):
+    item_idx_list = [config.item_idx] if isinstance(config.prompt, str) else config.item_idx[prompt_idx]
     if len(config.item_idx_file) != 0:
         with open(config.item_idx_file, 'r') as f:
             temp_list = json.load(f)
-            item_idx_list = [temp_list["item_idx"][p] for p in prompt_list]
+            item_idx_list = temp_list["item_idx"][prompt_idx]
     return item_idx_list
 
 
-def get_item_k_list(config, prompt_list):
-    item_k_list = [config.item_k] if isinstance(config.prompt, str) else config.item_k
+def get_item_k_list(config, prompt_idx):
+    item_k_list = config.item_k if isinstance(config.prompt, str) else config.item_k[prompt_idx]
     if len(config.item_idx_file) != 0:
         with open(config.item_idx_file, 'r') as f:
             temp_list = json.load(f)
-            item_k_list = [temp_list["item_k"][p] for p in prompt_list]
+            item_k_list = temp_list["item_k"][prompt_idx]
     return item_k_list
 
 
