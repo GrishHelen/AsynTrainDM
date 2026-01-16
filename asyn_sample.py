@@ -13,8 +13,6 @@ import json
 import random
 from absl import app, flags
 from ml_collections import config_flags
-from accelerate import Accelerator
-from accelerate.utils import ProjectConfiguration
 from accelerate.logging import get_logger
 from diffusers import StableDiffusionPipeline, UNet2DConditionModel
 from diffusers import DDIMScheduler
@@ -26,6 +24,8 @@ sys.path.append(os.path.dirname(os.path.dirname(script_path)))
 from sampling.base import generate_dm, generate_dm_concave
 from sampling.asyn import generate_asyn
 from utils.utils import seed_everything
+from utils.sampling import prepare_encoded_prompts
+from utils.setup import prepare_accelerator, prepare_pipeline
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -47,43 +47,8 @@ def main(_):
 
     seed_everything(config.seed)
 
-    accelerator_config = ProjectConfiguration(
-        project_dir=save_dir,
-        automatic_checkpoint_naming=True,
-        total_limit=100,
-    )
-
-    accelerator = Accelerator(
-        mixed_precision=config.mixed_precision,
-        project_config=accelerator_config
-    )
-
-    # load
-    pipeline = StableDiffusionPipeline.from_pretrained(config.pretrained.model, torch_dtype=torch.float16)  # float16
-    pipeline.vae.requires_grad_(False)
-    pipeline.text_encoder.requires_grad_(False)
-    pipeline.unet.requires_grad_(False)
-    # disable safety checker
-    pipeline.safety_checker = None
-    pipeline.set_progress_bar_config(
-        position=1,
-        disable=not accelerator.is_local_main_process,
-        leave=False,
-        desc="Timestep",
-        dynamic_ncols=True,
-    )
-    pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
-    total_image_num_per_gpu = config.sample.batch_size * config.sample.num_batches_per_epoch
-    inference_dtype = torch.float32
-    if accelerator.mixed_precision == "fp16":
-        inference_dtype = torch.float16
-    elif accelerator.mixed_precision == "bf16":
-        inference_dtype = torch.bfloat16
-
-    # Move unet, vae and text_encoder to device and cast to inference_dtype
-    pipeline.vae.to(accelerator.device, dtype=inference_dtype)
-    pipeline.text_encoder.to(accelerator.device, dtype=inference_dtype)
-    pipeline.unet.to(accelerator.device, dtype=inference_dtype)
+    accelerator = prepare_accelerator(config, save_dir)
+    pipeline = prepare_pipeline(config, accelerator)
 
     # Enable TF32 for faster training on Ampere GPUs,
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
@@ -124,22 +89,9 @@ def main(_):
         seed_everything(config.seed)
         # generate prompts
         prompt_idx = idx // config.sample.num_batches_per_epoch
-        prompts1 = [
-            prompt_list[prompt_idx]
-            for _ in range(config.sample.batch_size)
-        ]
-        total_prompts1.extend(prompts1)
-        # encode prompts
-        prompt_ids1 = pipeline.tokenizer(
-            prompts1,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=pipeline.tokenizer.model_max_length,
-        ).input_ids.to(accelerator.device)
-        prompt_embeds1 = pipeline.text_encoder(prompt_ids1)[0]
-        # combine prompt and neg_prompt
-        prompt_embeds1_combine = torch.cat([sample_neg_prompt_embeds, prompt_embeds1], dim=0)
+        total_prompts1.extend([[prompt_list[prompt_idx] for _ in range(config.sample.batch_size)]])
+        prompt_embeds1_combine = prepare_encoded_prompts(config, accelerator, pipeline, prompt_list[prompt_idx],
+                                                         sample_neg_prompt_embeds)
         cross_mask = None
 
         # ================================================================= #
