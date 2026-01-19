@@ -1,15 +1,12 @@
 # Copied from https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention_processor.py
 # with modifications
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
 import inspect
 import math
+from typing import Optional
 
 import torch
-import torch.nn as nn
 import torch.utils.checkpoint
-
 from diffusers.models.attention_processor import AttnProcessor2_0
 
 
@@ -185,7 +182,7 @@ def processor2_0_asyn_forward(
         return hidden_states
     else:
         used_layer_size = extra_input['used_layer_size'] if (
-                    extra_input is not None and 'used_layer_size' in extra_input) else 0
+                extra_input is not None and 'used_layer_size' in extra_input) else 0
         if attn_probs.shape[-2] == used_layer_size * used_layer_size:
             # b,h,h_w,seq_l = attn_probs.shape
             return hidden_states, attn_probs  # .reshape(b*h, h_w, seq_l)

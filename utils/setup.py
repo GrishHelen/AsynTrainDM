@@ -1,8 +1,8 @@
 import torch
 from accelerate import Accelerator
 from accelerate.utils import ProjectConfiguration
-from diffusers import StableDiffusionPipeline, UNet2DConditionModel
 from diffusers import DDIMScheduler
+from diffusers import StableDiffusionPipeline
 
 
 def prepare_accelerator(config, save_dir):

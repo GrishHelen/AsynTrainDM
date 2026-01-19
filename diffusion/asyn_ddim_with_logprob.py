@@ -1,14 +1,13 @@
 # Copied from https://github.com/huggingface/diffusers/blob/main/src/diffusers/schedulers/scheduling_ddim.py
 # with modifications
 
+import math
 from typing import Optional, Tuple, Union
 
-import math
 import torch
-
-from diffusers.utils.torch_utils import randn_tensor
 # from diffusers.utils import randn_tensor
 from diffusers.schedulers.scheduling_ddim import DDIMSchedulerOutput, DDIMScheduler
+from diffusers.utils.torch_utils import randn_tensor
 
 
 def _left_broadcast(t, shape):

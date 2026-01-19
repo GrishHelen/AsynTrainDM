@@ -1,11 +1,7 @@
 # Copied from https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/resnet.py
 # with modifications
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
-
 import torch
-import torch.nn as nn
 import torch.utils.checkpoint
 
 

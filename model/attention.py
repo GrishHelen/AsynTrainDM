@@ -1,11 +1,8 @@
 # Copied from https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention.py
 # with modifications
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional
 
-import torch
-import torch.nn as nn
 import torch.utils.checkpoint
 
 from .attention_processor import attention_asyn_forward

@@ -1,15 +1,13 @@
 # Copied from https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/unets/unet_2d_condition.py
 # with modifications
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
-import torch.nn as nn
 import torch.utils.checkpoint
-
-from diffusers.utils import USE_PEFT_BACKEND, scale_lora_layers, unscale_lora_layers
 from diffusers.models.unets.unet_2d_condition import UNet2DConditionOutput
+from diffusers.utils import USE_PEFT_BACKEND, scale_lora_layers, unscale_lora_layers
+
 from .unet_2d_blocks import down_block_asyn_forward, mid_block_asyn_forward, up_block_asyn_forward, \
     crossdown_block_asyn_forward, crossup_block_asyn_forward
 
@@ -345,7 +343,7 @@ def unet_asyn_forward(
     item_idx = extra_input['item_idx'] if (extra_input is not None and 'item_idx' in extra_input) else []
     item_idx = [item + 1 for item in item_idx]
     used_layer_size = extra_input['used_layer_size'] if (
-                extra_input is not None and 'used_layer_size' in extra_input) else 0
+            extra_input is not None and 'used_layer_size' in extra_input) else 0
     if len(item_idx):
         cross_mask = []
         for a in attn_probs_cross:
