@@ -273,6 +273,12 @@ def asyn_ddim_step_with_logprob(
     return prev_sample.type(sample.dtype), log_prob, pred_original_sample.type(sample.dtype)
 
 
+def latents_encode(pipeline, images):
+    latents = pipeline.vae.encode(images).sample
+    latents = latents * pipeline.vae.config.scaling_factor
+    return latents
+
+
 def latents_decode(pipeline, latents, device, dtype):
     image = pipeline.vae.decode(latents / pipeline.vae.config.scaling_factor, return_dict=False)[0]
     image, has_nsfw_concept = pipeline.run_safety_checker(image, device, dtype)

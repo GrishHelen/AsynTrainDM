@@ -14,7 +14,7 @@ def get_config():
     # sample path
     config.save_path = "../results"
     # exp name
-    config.exp_name = "AsynDM, test"
+    config.exp_name = "AsynDM, finetune"
     # gpu id
     config.dev_id = 0
     # prompt directly used
@@ -56,9 +56,9 @@ def get_config():
     # item idx file
     config.item_idx_file = ""
     # whether generate base2 (DM concave)
-    config.generate_dm_concave = 1
+    config.generate_dm_concave = 0
     # whether generate base (DM)
-    config.generate_dm = 1
+    config.generate_dm = 0
     # batch begin index
     config.begin_index = 0
     # curve type
@@ -85,6 +85,13 @@ def get_config():
     sample.num_batches_per_epoch = 1
     # whether use classifier-free guidance
     sample.cfg = True
+
+    ###### Fine-tuning ######
+    config.finetune = finetune = ml_collections.ConfigDict()
+    finetune.dataset_dir = '../diffusiondb'
+    finetune.batch_size = 32
+    finetune.val_size = 0.2
+    finetune.n_epochs = 3
 
     ###### Heatmap Parameters ######
     config.heatmap = heatmap = ml_collections.ConfigDict()
