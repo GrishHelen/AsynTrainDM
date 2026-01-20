@@ -1,22 +1,15 @@
-import contextlib
-import os
 import datetime
-import time
-import sys
-import shutil
-import torch
-import torch.nn.functional as F
-from functools import partial
-import tqdm
-from PIL import Image
 import json
-import random
+import os
+import shutil
+import sys
+from functools import partial
+
+import torch
+import tqdm
 from absl import app, flags
-from ml_collections import config_flags
 from accelerate.logging import get_logger
-from diffusers import StableDiffusionPipeline, UNet2DConditionModel
-from diffusers import DDIMScheduler
-import numpy as np
+from ml_collections import config_flags
 
 script_path = os.path.abspath(__file__)
 sys.path.append(os.path.dirname(os.path.dirname(script_path)))

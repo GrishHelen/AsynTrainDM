@@ -1,14 +1,12 @@
 # Copied from https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/transformers/transformer_2d.py
 # with modifications
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional
 
 import torch
-import torch.nn as nn
 import torch.utils.checkpoint
-
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
+
 from .attention import transformer_block_asyn_forward
 
 

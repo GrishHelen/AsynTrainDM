@@ -1,6 +1,7 @@
-import torch
-import numpy as np
 import json
+
+import numpy as np
+import torch
 
 
 def get_item_idx_list(config, prompt_idx):

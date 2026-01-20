@@ -1,11 +1,9 @@
 # Copied from https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/unets/unet_2d_blocks.py
 # with modifications
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple
 
 import torch
-import torch.nn as nn
 import torch.utils.checkpoint
 
 from .resnet import resnet_asyn_forward

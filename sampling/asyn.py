@@ -1,12 +1,13 @@
 import os
+from functools import partial
+
+import numpy as np
 import torch
 import torch.nn.functional as F
-from functools import partial
 import tqdm
 from PIL import Image
-import numpy as np
 
-from diffusion.asyn_ddim_with_logprob import ddim_step_with_logprob, asyn_ddim_step_with_logprob, latents_decode
+from diffusion.asyn_ddim_with_logprob import asyn_ddim_step_with_logprob, latents_decode
 from model.unet_2d_condition import unet_asyn_forward
 from .utils import get_item_idx_list, get_item_k_list, func_prev_linear, func_prev_binary
 
