@@ -9,7 +9,7 @@ import tqdm
 from diffusion.asyn_ddim_with_logprob import latents_encode
 from finetuning.utils import generate_timesteps
 from model.unet_2d_condition import unet_asyn_forward
-from utils.sampling import prepare_encoded_prompts
+from utils.sampling import prepare_encoded_prompts, encode_prompts_list
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -126,16 +126,7 @@ def train_asyn(config, accelerator, pipeline, train_dataloader, val_dataloader=N
         )
 
     if sample_neg_prompt_embeds is None:
-        neg_prompt_embed = pipeline.text_encoder(
-            pipeline.tokenizer(
-                [""],
-                return_tensors="pt",
-                padding="max_length",
-                truncation=True,
-                max_length=pipeline.tokenizer.model_max_length,
-            ).input_ids.to(accelerator.device)
-        )[0]
-        sample_neg_prompt_embeds = neg_prompt_embed.repeat(config.finetune.batch_size, 1, 1)
+        sample_neg_prompt_embeds = encode_prompts_list(pipeline, accelerator.device, [""])
 
     n_epochs = config.finetune.n_epochs
     for epoch in range(n_epochs):

@@ -88,9 +88,9 @@ def get_config():
 
     ###### Fine-tuning ######
     config.finetune = finetune = ml_collections.ConfigDict()
-    finetune.dataset_dir = '../diffusiondb'
+    finetune.dataset_dir = '/home/ergrishina_2/Diploma/diffusiondb'
     finetune.batch_size = 32
-    finetune.val_size = 0.2
+    finetune.val_ratio = 0.2
     finetune.n_epochs = 3
 
     ###### Heatmap Parameters ######

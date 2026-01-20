@@ -24,7 +24,7 @@ sys.path.append(os.path.dirname(os.path.dirname(script_path)))
 from sampling.base import generate_dm, generate_dm_concave
 from sampling.asyn import generate_asyn
 from utils.utils import seed_everything
-from utils.sampling import prepare_encoded_prompts
+from utils.sampling import prepare_encoded_prompts, encode_prompts_list
 from utils.setup import prepare_accelerator, prepare_pipeline
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
@@ -56,15 +56,7 @@ def main(_):
         torch.backends.cuda.matmul.allow_tf32 = True
 
     # generate negative prompt embeddings
-    neg_prompt_embed = pipeline.text_encoder(
-        pipeline.tokenizer(
-            [""],
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=pipeline.tokenizer.model_max_length,
-        ).input_ids.to(accelerator.device)
-    )[0]
+    neg_prompt_embed = encode_prompts_list(pipeline, accelerator.device, [""])
     sample_neg_prompt_embeds = neg_prompt_embed.repeat(config.sample.batch_size, 1, 1)
 
     prompt_list = [config.prompt] if isinstance(config.prompt, str) else config.prompt

@@ -16,6 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(script_path)))
 from utils.utils import seed_everything
 from utils.setup import prepare_accelerator, prepare_pipeline, prepare_dataloaders
 from finetuning.asyn import train_asyn
+from utils.sampling import encode_prompts_list
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -46,18 +47,10 @@ def main(_):
         torch.backends.cuda.matmul.allow_tf32 = True
 
     # generate negative prompt embeddings
-    neg_prompt_embed = pipeline.text_encoder(
-        pipeline.tokenizer(
-            [""],
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=pipeline.tokenizer.model_max_length,
-        ).input_ids.to(accelerator.device)
-    )[0]
+    neg_prompt_embed = encode_prompts_list(pipeline, accelerator.device, [""])
     sample_neg_prompt_embeds = neg_prompt_embed.repeat(config.sample.batch_size, 1, 1)
 
-    train_dataloader, val_dataloader = prepare_dataloaders(config)
+    train_dataloader, val_dataloader = prepare_dataloaders(config, pipeline, accelerator.device)
 
     # asyn
     train_asyn(config, accelerator, pipeline, train_dataloader, val_dataloader,
