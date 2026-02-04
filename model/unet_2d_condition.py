@@ -7,6 +7,7 @@ import torch
 import torch.utils.checkpoint
 from diffusers.models.unets.unet_2d_condition import UNet2DConditionOutput
 from diffusers.utils import USE_PEFT_BACKEND, scale_lora_layers, unscale_lora_layers
+from diffusers.utils import deprecate
 
 from .unet_2d_blocks import down_block_asyn_forward, mid_block_asyn_forward, up_block_asyn_forward, \
     crossdown_block_asyn_forward, crossup_block_asyn_forward

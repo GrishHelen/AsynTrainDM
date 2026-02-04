@@ -14,7 +14,7 @@ def get_config():
     # sample path
     config.save_path = "../results"
     # exp name
-    config.exp_name = "AsynDM, finetune"
+    config.exp_name = "AsynDM, finetune_2"
     # gpu id
     config.dev_id = 0
     # prompt directly used
@@ -85,13 +85,26 @@ def get_config():
     sample.num_batches_per_epoch = 1
     # whether use classifier-free guidance
     sample.cfg = True
+    # sample.finetuned_model = '/home/ergrishina_2/Diploma/results/AsynDM, finetune/models_state_dict/model_1.pth'
 
     ###### Fine-tuning ######
     config.finetune = finetune = ml_collections.ConfigDict()
     finetune.dataset_dir = '/home/ergrishina_2/Diploma/diffusiondb'
-    finetune.batch_size = 32
+    finetune.batch_size = 3
     finetune.val_ratio = 0.2
-    finetune.n_epochs = 3
+    finetune.n_epochs = 30
+    finetune.lora_rank = 4
+    finetune.lora_alpha = 16
+    finetune.lora_dropout = 0.05
+    finetune.max_grad_norm = 1.0
+    finetune.grad_accumulation_steps = 1
+    finetune.optimizer = 'AdamW'
+    finetune.lr = 2e-6
+
+    ###### Logging ######
+    config.logging = logging = ml_collections.ConfigDict()
+    logging.batch = 50
+    logging.epoch = 5
 
     ###### Heatmap Parameters ######
     config.heatmap = heatmap = ml_collections.ConfigDict()

@@ -8,6 +8,7 @@ from typing import Optional
 import torch
 import torch.utils.checkpoint
 from diffusers.models.attention_processor import AttnProcessor2_0
+from diffusers.utils import deprecate
 
 
 def attention_asyn_forward(

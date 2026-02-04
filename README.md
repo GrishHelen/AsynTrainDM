@@ -7,5 +7,6 @@
 ### Fine-tuning
 
 Used dataset [DiffusionDB](https://huggingface.co/datasets/poloclub/diffusiondb), 
-version `2m_first_50k`, and only samples with $\leq 15$ words in prompt. 
-As result, dataset contains 17069 rows.
+version `2m_first_10k`, and only samples with $\leq 15$ words in prompt. 
+As result, dataset contains $2979$ rows.
+

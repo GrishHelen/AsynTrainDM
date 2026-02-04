@@ -4,6 +4,7 @@
 from typing import Any, Dict, Optional
 
 import torch.utils.checkpoint
+from diffusers.models.attention import _chunked_feed_forward
 
 from .attention_processor import attention_asyn_forward
 

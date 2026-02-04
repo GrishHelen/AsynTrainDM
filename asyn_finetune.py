@@ -14,7 +14,7 @@ script_path = os.path.abspath(__file__)
 sys.path.append(os.path.dirname(os.path.dirname(script_path)))
 
 from utils.utils import seed_everything
-from utils.setup import prepare_accelerator, prepare_pipeline, prepare_dataloaders
+from utils.setup import prepare_accelerator, prepare_pipeline, prepare_dataloaders, prepare_optimizer
 from finetuning.asyn import train_asyn
 from utils.sampling import encode_prompts_list
 
@@ -35,6 +35,8 @@ def main(_):
 
     unique_id = config.exp_name if config.exp_name else datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
     save_dir = os.path.join(config.save_path, unique_id)
+    os.makedirs(save_dir)
+    shutil.copy(src="config/config.py", dst=save_dir)
 
     seed_everything(config.seed)
 
@@ -48,15 +50,14 @@ def main(_):
 
     # generate negative prompt embeddings
     neg_prompt_embed = encode_prompts_list(pipeline, accelerator.device, [""])
-    sample_neg_prompt_embeds = neg_prompt_embed.repeat(config.sample.batch_size, 1, 1)
+    sample_neg_prompt_embeds = neg_prompt_embed.repeat(config.finetune.batch_size, 1, 1)
 
     train_dataloader, val_dataloader = prepare_dataloaders(config, pipeline, accelerator.device)
+    optimizer = prepare_optimizer(config, pipeline)
 
     # asyn
-    train_asyn(config, accelerator, pipeline, train_dataloader, val_dataloader,
+    train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloader, val_dataloader,
                sample_neg_prompt_embeds=sample_neg_prompt_embeds)
-
-    shutil.copy("config/config.py", save_dir)
 
 
 if __name__ == "__main__":

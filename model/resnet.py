@@ -3,6 +3,7 @@
 
 import torch
 import torch.utils.checkpoint
+from diffusers.utils import deprecate
 
 
 def resnet_asyn_forward(self, input_tensor: torch.Tensor, temb: torch.Tensor, *args, **kwargs) -> torch.Tensor:

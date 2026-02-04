@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.utils.checkpoint
+from diffusers.utils import deprecate
+from diffusers.utils.torch_utils import is_torch_version, apply_freeu
 
 from .resnet import resnet_asyn_forward
 from .transformer_2d import transformer_asyn_forward

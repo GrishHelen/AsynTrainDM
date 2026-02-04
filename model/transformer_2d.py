@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 import torch
 import torch.utils.checkpoint
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
+from diffusers.utils.torch_utils import is_torch_version
 
 from .attention import transformer_block_asyn_forward
 

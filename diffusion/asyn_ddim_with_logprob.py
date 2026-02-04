@@ -273,7 +273,7 @@ def asyn_ddim_step_with_logprob(
 
 
 def latents_encode(pipeline, images):
-    latents = pipeline.vae.encode(images).sample
+    latents = pipeline.vae.encode(images)[0].sample()
     latents = latents * pipeline.vae.config.scaling_factor
     return latents
 
