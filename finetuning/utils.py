@@ -3,34 +3,34 @@ import os
 import torch
 
 from model.unet_2d_condition import unet_asyn_forward
+from utils.utils import FinetuneTsType
 
 
-def generate_timesteps_tensor(pipeline, batch_size, type='random'):
+def generate_timesteps_tensor(pipeline, batch_size, type: FinetuneTsType = FinetuneTsType.RANDOM):
     device = pipeline.unet.device
     ts = pipeline.scheduler.timesteps.to(device)  # [T...0]
     res_shape = (batch_size, 64, 64)
 
-    if type == 'random':
+    if type == FinetuneTsType.RANDOM:
         indices = torch.randint(low=0, high=len(ts), size=res_shape, device=device)
         tensor_t = ts[indices]
+    elif type == FinetuneTsType.CONST:
+        t_idx = torch.randint(low=0, high=len(ts), size=(1,), device=device)
+        tensor_t = torch.ones(res_shape, device=device) * ts[t_idx]
+        tensor_t = tensor_t.to(dtype=ts.dtype)
     else:
-        raise NotImplementedError
+        raise NotImplementedError(f'{type.name} is not implemented')
     return tensor_t.repeat(4, 1, 1, 1).swapaxes(0, 1)
 
 
-def add_noise(pipeline, clear_latents, ts_tensor=None):
-    if ts_tensor is None:
-        ts_tensor = generate_timesteps_tensor(pipeline, batch_size=clear_latents.shape[0])
+def add_noise(scheduler, original_samples, noise, timesteps):
+    alphas_cumprod = scheduler.alphas_cumprod.to(timesteps.device)[timesteps]
+    sqrt_alpha_prod = alphas_cumprod ** 0.5
+    sqrt_one_minus_alpha_prod = (1 - alphas_cumprod) ** 0.5
 
-    device = clear_latents.device
-    noise = torch.randn_like(clear_latents, device=device)
+    noisy_samples = sqrt_alpha_prod * original_samples + sqrt_one_minus_alpha_prod * noise
 
-    alpha_cumprod_t = pipeline.scheduler.alphas_cumprod.to(device)[ts_tensor]
-    alpha_cumprod_t = alpha_cumprod_t.expand_as(clear_latents)
-
-    noisy_latent = torch.sqrt(alpha_cumprod_t) * clear_latents + torch.sqrt(1 - alpha_cumprod_t) * noise
-
-    return noisy_latent
+    return noisy_samples
 
 
 def predict_noise(config, pipeline, noisy_latents, timesteps, prompt_embeds1_combine):

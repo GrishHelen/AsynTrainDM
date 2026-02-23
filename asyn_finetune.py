@@ -35,8 +35,6 @@ def main(_):
 
     unique_id = config.exp_name if config.exp_name else datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
     save_dir = os.path.join(config.save_path, unique_id)
-    os.makedirs(save_dir)
-    shutil.copy(src="config/config.py", dst=save_dir)
 
     seed_everything(config.seed)
 

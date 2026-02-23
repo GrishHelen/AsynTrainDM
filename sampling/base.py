@@ -14,11 +14,12 @@ from .utils import get_item_idx_list, get_item_k_list, func_prev_binary
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
 
-def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine):
+def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_save_dir=None):
     global_idx = idx * config.sample.batch_size
     autocast = accelerator.autocast
     prompt_idx = idx // config.sample.num_batches_per_epoch
-    save_dir = accelerator.project_configuration.project_dir
+    if img_save_dir is None:
+        img_save_dir = os.path.join(accelerator.project_configuration.project_dir, "images/")
     item_idx_list = get_item_idx_list(config, prompt_idx)
     item_k_list = get_item_k_list(config, prompt_idx)
 
@@ -104,21 +105,22 @@ def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine):
     if config.generate_dm:
         images = latents_decode(pipeline, latents_t, accelerator.device, prompt_embeds1_combine.dtype).cpu().detach()
 
-        os.makedirs(os.path.join(save_dir, "images/"), exist_ok=True)
+        os.makedirs(img_save_dir, exist_ok=True)
         for j, image in enumerate(images):
             # print(image)
             pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-            pil.save(os.path.join(save_dir, f"images/{(j + global_idx):05}_DM.png"))
+            pil.save(os.path.join(img_save_dir, f"{(j + global_idx):05}_DM.png"))
 
     if config.static_mask:
         return cross_mask
 
 
-def generate_dm_concave(config, accelerator, pipeline, idx, prompt_embeds1_combine):
+def generate_dm_concave(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_save_dir=None):
     global_idx = idx * config.sample.batch_size
     autocast = accelerator.autocast
     prompt_idx = idx // config.sample.num_batches_per_epoch
-    save_dir = accelerator.project_configuration.project_dir
+    if img_save_dir is None:
+        img_save_dir = os.path.join(accelerator.project_configuration.project_dir, "images/")
     item_k_list = get_item_k_list(config, prompt_idx)
 
     gs = [torch.Generator(device='cuda') for _ in range(config.sample.batch_size)]
@@ -189,7 +191,7 @@ def generate_dm_concave(config, accelerator, pipeline, idx, prompt_embeds1_combi
 
     images = latents_decode(pipeline, latents_t, accelerator.device, prompt_embeds1_combine.dtype).cpu().detach()
 
-    os.makedirs(os.path.join(save_dir, "images/"), exist_ok=True)
+    os.makedirs(img_save_dir, exist_ok=True)
     for j, image in enumerate(images):
         pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-        pil.save(os.path.join(save_dir, f"images/{(j + global_idx):05}_dm_concave.png"))
+        pil.save(os.path.join(img_save_dir, f"{(j + global_idx):05}_dm_concave.png"))
