@@ -14,7 +14,7 @@ def save_config(config):
     save_path = os.path.join(save_dir, 'config.json')
     os.makedirs(save_dir, exist_ok=True)
 
-    json_data = config.to_json(indent=2)
+    json_data = config.to_json_best_effort(indent=2)
     with open(save_path, 'w') as f:
         f.write(json_data)
 
@@ -39,13 +39,13 @@ def get_default_config():
     config.prompt = [
         "a rabbit playing basketball",
         "a white car and a red sheep",
-        # "a cartoon style illustration of a macaw skating",
-        # "a photo of a gift box at the fireplace",
-        # "a photo of a cute ostrich on the chair",
-        # "a photo of a cute ostrich in the cave",
-        # "a photo of an orange candle in the bathroom",
-        # "a photo of an orange candle among the snowdrifts",
-        # "a painting of an orange on the roof",
+        "a cartoon style illustration of a macaw skating",
+        "a photo of a cute ostrich on the chair",
+
+        "two otters holding hands",
+        "a cute ostrich on the chair",
+        "a penguin wearing a straw hat",
+        "a blue cat and a gray rabbit",
     ]
     # prompt file
     config.prompt_file = ""
@@ -55,19 +55,19 @@ def get_default_config():
     config.item_idx = [
         [1, 3],
         [2, 6],
-        # [6],
-        # [5, 8],
-        # [5, 8],
-        # [5, 8],
-        # [5, 8],
-        # [5, 8],
-        # [4, 7],
+        [6],
+        [5, 8],
+
+        [1],
+        [2, 5],
+        [1, 5],
+        [2, 6],
     ]  # [1,5,11][1,7,13][3,9][1,4][2,4]
     # item k in prompt
     config.item_k = [
-        [0.7, 0.7], [0.7, 0.7],  # [0.7],
-        # [0.7, 0.7], [0.7, 0.7], [0.7, 0.7],
-        # [0.7, 0.7], [0.7, 0.7], [0.7, 0.7], [0.7, 0.7]
+        [0.7, 0.7], [0.7, 0.7], [0.7], [0.7, 0.7],
+
+        [0.7], [0.7, 0.7], [0.7, 0.7], [0.7, 0.7],
     ]
     # use static or dynamic mask
     config.static_mask = 0
@@ -109,8 +109,8 @@ def get_default_config():
     config.finetune = finetune = ml_collections.ConfigDict()
     finetune.dataset_dir = '/home/ergrishina_2/Diploma/diffusiondb'
     finetune.batch_size = 3
-    finetune.val_ratio = 0.2
     finetune.n_epochs = 40
+    finetune.max_batches = -1
     finetune.lora_rank = 4
     finetune.lora_alpha = 8
     finetune.lora_dropout = 0.0
@@ -124,6 +124,7 @@ def get_default_config():
     config.logging = logging = ml_collections.ConfigDict()
     logging.batch = 50
     logging.epoch = 5
+    logging.eval_epoch = 2
 
     ###### Heatmap Parameters ######
     config.heatmap = heatmap = ml_collections.ConfigDict()
@@ -154,10 +155,11 @@ def get_config():
 
     # config.finetune args
     parser.add_argument("--finetune_dataset_dir", "--dataset_dir", "--dataset", type=str,
-                        default="/home/ergrishina_2/Diploma/diffusiondb")
+                        default="/home/ergrishina_2/Diploma/laion")
     parser.add_argument("--finetune_batch_size", "--finetune_bs", type=int, default=3)
     parser.add_argument("--finetune_n_epochs", "--finetune_epochs", type=int, default=50)
-    parser.add_argument("--finetune_lora_rank", type=int, default=16)
+    parser.add_argument("--finetune_max_batches", "--finetune_batches", type=int, default=-1)
+    parser.add_argument("--finetune_lora_rank", type=int, default=32)
     parser.add_argument("--finetune_lora_alpha", type=int, default=None)
     parser.add_argument("--finetune_lora_dropout", type=float, default=0.0)
     parser.add_argument("--finetune_grad_accumulation_steps", "--finetune_acc_steps", type=int, default=1)
@@ -166,6 +168,7 @@ def get_config():
 
     # config.logging args
     parser.add_argument("--log_epoch", type=int, default=5)
+    parser.add_argument("--eval_epoch", type=int, default=2)
 
     args = parser.parse_args()
     if args.config_path is not None:
@@ -180,8 +183,7 @@ def get_config():
     # config args
     if args.mixed_precision:
         config.mixed_precision = args.mixed_precision
-    config.exp_name = args.exp_name
-    print(f'exp_name: {args.exp_name}')
+    config.exp_name = args.exp_name if args.exp_name else datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
     config.generate_dm_concave = args.generate_dm_concave
     config.generate_dm = args.generate_dm
 
@@ -195,6 +197,7 @@ def get_config():
     config.finetune.dataset_dir = args.finetune_dataset_dir
     config.finetune.batch_size = args.finetune_batch_size
     config.finetune.n_epochs = args.finetune_n_epochs
+    config.finetune.max_batches = args.finetune_max_batches
     config.finetune.lora_rank = args.finetune_lora_rank
     if args.finetune_lora_alpha is None:
         config.finetune.lora_alpha = 2 * config.finetune.lora_rank
@@ -214,6 +217,7 @@ def get_config():
 
     # config.logging args
     config.logging.epoch = args.log_epoch
+    config.logging.eval_epoch = args.eval_epoch
 
     save_config(config)
     return config

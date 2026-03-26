@@ -18,6 +18,12 @@ def generate_timesteps_tensor(pipeline, batch_size, type: FinetuneTsType = Finet
         t_idx = torch.randint(low=0, high=len(ts), size=(1,), device=device)
         tensor_t = torch.ones(res_shape, device=device) * ts[t_idx]
         tensor_t = tensor_t.to(dtype=ts.dtype)
+    elif type == FinetuneTsType.CONST_DELTA:
+        t_idx = torch.randint(low=0, high=len(ts), size=(1,), device=device)
+        delta = int(0.2 * len(ts))
+        deltas = torch.randint(low=-delta, high=delta, size=res_shape, device=device)
+        indices = torch.clamp(t_idx + deltas, min=0, max=len(ts) - 1)
+        tensor_t = ts[indices]
     else:
         raise NotImplementedError(f'{type.name} is not implemented')
     return tensor_t.repeat(4, 1, 1, 1).swapaxes(0, 1)

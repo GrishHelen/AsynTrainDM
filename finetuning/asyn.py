@@ -1,3 +1,4 @@
+import gc
 import os.path
 from functools import partial
 
@@ -6,15 +7,15 @@ import torch.nn.functional as F
 import tqdm
 from diffusers import DDIMScheduler
 
-from asyn_sample import sample_all
 from diffusion.asyn_ddim_with_logprob import latents_encode
 from finetuning.utils import generate_timesteps_tensor, add_noise, predict_noise, array_to_file
+from sampling.all import sample_all
 from utils.sampling import encode_prompts_list
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
 
-def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer, sample_neg_prompt_embeds, models_save_dir):
+def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer, sample_neg_prompt_embeds, losses_save_dir):
     autocast = accelerator.autocast
     params_to_optimize = list(filter(lambda p: p.requires_grad, pipeline.unet.parameters()))
     losses = []
@@ -22,6 +23,8 @@ def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer, sampl
     pipeline.unet.train()
 
     for i, batch in enumerate(dataloader):
+        if i == config.finetune.max_batches:
+            break
         with accelerator.accumulate(pipeline.unet):
             with autocast():
                 with torch.no_grad():
@@ -46,26 +49,25 @@ def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer, sampl
                 losses.append(round(loss.item(), 4))
 
                 if torch.isnan(loss).item():
-                    array_to_file(models_save_dir, 'train_loss_history.txt', losses)
-                    array_to_file(models_save_dir, 'grad_norms_history.txt', grad_norms)
+                    array_to_file(losses_save_dir, 'train_loss_history.txt', losses)
+                    array_to_file(losses_save_dir, 'grad_norms_history.txt', grad_norms)
                     return None
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     total_norm = accelerator.clip_grad_norm_(params_to_optimize, config.finetune.max_grad_norm).item()
                     grad_norms.append(total_norm)
-                if (i + 1) % config.finetune.grad_accumulation_steps == 0 or i == len(dataloader) - 1:
-                    optimizer.step()
-                    optimizer.zero_grad()
+                optimizer.step()
+                optimizer.zero_grad()
 
         if i % config.logging.batch == 0:
-            array_to_file(models_save_dir, 'train_loss_history.txt', losses)
+            array_to_file(losses_save_dir, 'train_loss_history.txt', losses)
             losses = []
-            array_to_file(models_save_dir, 'grad_norms_history.txt', grad_norms)
+            array_to_file(losses_save_dir, 'grad_norms_history.txt', grad_norms)
             grad_norms = []
 
-    array_to_file(models_save_dir, 'train_loss_history.txt', losses)
-    array_to_file(models_save_dir, 'grad_norms_history.txt', grad_norms)
+    array_to_file(losses_save_dir, 'train_loss_history.txt', losses)
+    array_to_file(losses_save_dir, 'grad_norms_history.txt', grad_norms)
     return loss.item()
 
 
@@ -102,15 +104,19 @@ def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer, sampl
 #     return loss.item()
 
 def val_epoch_asyn(config, accelerator, pipeline, images_save_dir):
-    old_scheduler = pipeline.scheduler
-    pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
+    autocast = accelerator.autocast
+    pipeline.unet.eval()
+    with autocast():
+        with torch.no_grad():
+            old_scheduler = pipeline.scheduler
+            pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
 
-    sample_all(config, accelerator, pipeline, img_save_dir=images_save_dir)
+            sample_all(config, accelerator, pipeline, img_save_dir=images_save_dir)
 
-    pipeline.scheduler = old_scheduler
+            pipeline.scheduler = old_scheduler
 
 
-def train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloader, val_dataloader=None,
+def train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloader,
                sample_neg_prompt_embeds=None):
     best_model_path = None
     models_save_dir = os.path.join(save_dir, "models_state_dict/")
@@ -128,24 +134,29 @@ def train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloa
         print(f'\nEpoch {epoch + 1}', flush=True)
 
         train_loss = train_epoch_asyn(config, accelerator, pipeline, train_dataloader, optimizer,
-                                      sample_neg_prompt_embeds, models_save_dir)
+                                      sample_neg_prompt_embeds, save_dir)
         loss_history.append([train_loss])
         print(f'train loss: {train_loss}', flush=True)
 
-        with torch.no_grad():
-            val_epoch_asyn(config, accelerator, pipeline, eval_save_dir)
+        if epoch % config.logging.eval_epoch == 0:
+            with torch.no_grad():
+                val_epoch_asyn(config, accelerator, pipeline, os.path.join(eval_save_dir, f"epoch_{epoch + 1}/"))
 
-            if best_model_path is not None:
-                os.remove(best_model_path)
-            best_model_path = os.path.join(models_save_dir, f'model_{epoch + 1}.pth')
-            torch.save(pipeline.unet.state_dict(), best_model_path)
+                if best_model_path is not None:
+                    os.remove(best_model_path)
+                best_model_path = os.path.join(models_save_dir, f'model_{epoch + 1}.pth')
+                torch.save(pipeline.unet.state_dict(), best_model_path)
         if epoch % config.logging.epoch == 0:
             array_to_file(save_dir, 'epoch_loss_history.txt', loss_history)
             loss_history = []
         if train_loss is None:
             return
 
-    array_to_file(models_save_dir, 'epoch_loss_history.txt', loss_history)
+        gc.collect()
+        torch.cuda.empty_cache()
+        accelerator.free_memory()
+
+    array_to_file(save_dir, 'epoch_loss_history.txt', loss_history)
 
     if best_model_path is not None:
         os.remove(best_model_path)

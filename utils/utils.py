@@ -1,14 +1,15 @@
 import random
+from enum import Enum
 
 import numpy as np
 import torch
-from enum import Enum
+
 
 class FinetuneTsType(Enum):
-    CONST = 1
-    CONST_DELTA = 2
-    BLOCK_2X2 = 3
-    RANDOM = 4
+    CONST = 'constant'
+    CONST_DELTA = 'constant_delta'
+    BLOCK_2X2 = 'block_2x2'
+    RANDOM = 'random'
 
 
 def seed_everything(seed):

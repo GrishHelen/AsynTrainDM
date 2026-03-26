@@ -1,18 +1,16 @@
 import datetime
 import os
-import shutil
 import sys
 from functools import partial
 
 import torch
 import tqdm
-from absl import app, flags
 from accelerate.logging import get_logger
-from ml_collections import config_flags
 
 script_path = os.path.abspath(__file__)
 sys.path.append(os.path.dirname(os.path.dirname(script_path)))
 
+from config.config import get_config
 from utils.utils import seed_everything
 from utils.setup import prepare_accelerator, prepare_pipeline, prepare_dataloaders, prepare_optimizer
 from finetuning.asyn import train_asyn
@@ -20,20 +18,16 @@ from utils.sampling import encode_prompts_list
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
-FLAGS = flags.FLAGS
-config_flags.DEFINE_config_file("config", "config/config.py", "Sampling configuration.")
-
 logger = get_logger(__name__)
 
 
-def main(_):
-    # basic setup
-    config = FLAGS.config
+def main(config):
     print(f'========== seed: {config.seed} ==========')
     if torch.cuda.is_available():
         torch.cuda.set_device(config.dev_id)
 
     unique_id = config.exp_name if config.exp_name else datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
+    print(f'Experiment: {unique_id}')
     save_dir = os.path.join(config.save_path, unique_id)
 
     seed_everything(config.seed)
@@ -50,13 +44,14 @@ def main(_):
     neg_prompt_embed = encode_prompts_list(pipeline, accelerator.device, [""])
     sample_neg_prompt_embeds = neg_prompt_embed.repeat(config.finetune.batch_size, 1, 1)
 
-    train_dataloader, val_dataloader = prepare_dataloaders(config, pipeline, accelerator.device)
-    optimizer = prepare_optimizer(config, pipeline)
+    train_dataloader = prepare_dataloaders(config, pipeline, accelerator)
+    optimizer = prepare_optimizer(config, pipeline, accelerator)
 
     # asyn
-    train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloader, val_dataloader,
+    train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloader,
                sample_neg_prompt_embeds=sample_neg_prompt_embeds)
 
 
 if __name__ == "__main__":
-    app.run(main)
+    config = get_config()
+    main(config)
