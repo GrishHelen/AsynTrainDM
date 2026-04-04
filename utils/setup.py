@@ -1,5 +1,6 @@
 import datasets
 import torch
+import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.utils import ProjectConfiguration
 from diffusers import DDIMScheduler, DDPMScheduler
@@ -13,10 +14,11 @@ from utils.sampling import encode_prompts_list
 
 
 class DiffusionDBDataset(Dataset):
-    def __init__(self, orig_dataset, image_transform, text_transform):
+    def __init__(self, orig_dataset, image_transform, text_transform, load_masks=False):
         self.dataset = orig_dataset
         self.image_transform = image_transform
         self.text_transform = text_transform
+        self.load_masks = load_masks
 
     def __len__(self):
         return len(self.dataset)
@@ -25,12 +27,18 @@ class DiffusionDBDataset(Dataset):
         item = self.dataset[idx]
         image = item['image']
         prompt = item['prompt']
+        mask = item.get('mask', None)
         image = self.image_transform(image)
         prompt = self.text_transform(prompt)
         result = {
             'image': image,
             'prompt_embeds': prompt
         }
+        if self.load_masks:
+            if mask is None:
+                raise ValueError(f"Mask for item {idx} doesn't exist")
+            result['mask'] = F.interpolate(torch.tensor(mask, dtype=torch.float32).unsqueeze(0).unsqueeze(0),
+                                           (64, 64)).squeeze()
         return result
 
 
@@ -140,7 +148,8 @@ def prepare_dataloaders(config, pipeline, accelerator):
     ])
     text_transform = lambda prompt: torch.squeeze(encode_prompts_list(pipeline, device, [prompt]))
 
-    dataset = DiffusionDBDataset(orig_dataset, image_transform=image_transform, text_transform=text_transform)
+    dataset = DiffusionDBDataset(orig_dataset, image_transform=image_transform, text_transform=text_transform,
+                                 load_masks=config.finetune.use_masks)
     train_loader = DataLoader(dataset=dataset, batch_size=config.finetune.batch_size, shuffle=True, num_workers=0)
     train_loader = accelerator.prepare_data_loader(train_loader)
     return train_loader

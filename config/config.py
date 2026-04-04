@@ -5,7 +5,7 @@ import os
 
 import ml_collections
 
-from finetuning.utils import FinetuneTsType
+from finetuning.utils import FinetuneType, FinetuneTsType
 
 
 def save_config(config):
@@ -40,9 +40,7 @@ def get_default_config():
         "a rabbit playing basketball",
         "a white car and a red sheep",
         "a cartoon style illustration of a macaw skating",
-        "a photo of a cute ostrich on the chair",
 
-        "two otters holding hands",
         "a cute ostrich on the chair",
         "a penguin wearing a straw hat",
         "a blue cat and a gray rabbit",
@@ -56,18 +54,16 @@ def get_default_config():
         [1, 3],
         [2, 6],
         [6],
-        [5, 8],
 
-        [1],
         [2, 5],
         [1, 5],
         [2, 6],
     ]  # [1,5,11][1,7,13][3,9][1,4][2,4]
     # item k in prompt
     config.item_k = [
-        [0.7, 0.7], [0.7, 0.7], [0.7], [0.7, 0.7],
+        [0.7, 0.7], [0.7, 0.7], [0.7],
 
-        [0.7], [0.7, 0.7], [0.7, 0.7], [0.7, 0.7],
+        [0.7, 0.7], [0.7, 0.7], [0.7, 0.7],
     ]
     # use static or dynamic mask
     config.static_mask = 0
@@ -119,6 +115,8 @@ def get_default_config():
     finetune.optimizer = 'AdamW'
     finetune.lr = 5e-4
     finetune.ts_type = FinetuneTsType.RANDOM
+    finetune.use_masks = False
+    finetune.type = FinetuneType.Asyn
 
     ###### Logging ######
     config.logging = logging = ml_collections.ConfigDict()
@@ -145,6 +143,7 @@ def get_config():
     parser.add_argument("--exp_name", "--exp", "--name", type=str, default=None)
     parser.add_argument("--generate_dm_concave", "--dm_concave", type=int, default=0)
     parser.add_argument("--generate_dm", "--dm", type=int, default=1)
+    parser.add_argument("--sample_batch_size", "--sample_bs", type=int, default=4)
 
     # config.pretrained args
     parser.add_argument("--pretrained_model", "--pretrained", type=str,
@@ -165,6 +164,8 @@ def get_config():
     parser.add_argument("--finetune_grad_accumulation_steps", "--finetune_acc_steps", type=int, default=1)
     parser.add_argument("--finetune_lr", type=float, default=None)
     parser.add_argument("--finetune_ts_type", type=str, default=None)
+    parser.add_argument("--finetune_use_mask", type=int, default=0)
+    parser.add_argument("--finetune_type", type=str, default='asyn')
 
     # config.logging args
     parser.add_argument("--log_epoch", type=int, default=5)
@@ -214,6 +215,13 @@ def get_config():
         config.finetune.ts_type = FinetuneTsType.BLOCK_2X2
     elif args.finetune_ts_type in ['rand', 'random']:
         config.finetune.ts_type = FinetuneTsType.RANDOM
+    else:
+        raise ValueError('')
+    config.finetune.use_masks = bool(args.finetune_use_mask)
+    if args.finetune_type == 'asyn':
+        config.finetune.type = FinetuneType.Asyn
+    elif args.finetune_type == 'asyndm':
+        config.finetune.type = FinetuneType.AsynDM
 
     # config.logging args
     config.logging.epoch = args.log_epoch

@@ -13,6 +13,11 @@ class FinetuneTsType(Enum):
     RANDOM = 'random'
 
 
+class FinetuneType(Enum):
+    Asyn = 'asyn'
+    AsynDM = 'asyndm'
+
+
 def generate_timesteps_tensor(pipeline, batch_size, type: FinetuneTsType = FinetuneTsType.RANDOM):
     device = pipeline.unet.device
     ts = pipeline.scheduler.timesteps.to(device)  # [T...0]
@@ -38,6 +43,9 @@ def generate_timesteps_tensor(pipeline, batch_size, type: FinetuneTsType = Finet
 
 def add_noise(scheduler, original_samples, noise, timesteps):
     alphas_cumprod = scheduler.alphas_cumprod.to(timesteps.device)[timesteps]
+    if len(alphas_cumprod.shape) < len(original_samples.shape):
+        alphas_cumprod = alphas_cumprod.unsqueeze(1)
+
     sqrt_alpha_prod = alphas_cumprod ** 0.5
     sqrt_one_minus_alpha_prod = (1 - alphas_cumprod) ** 0.5
 

@@ -58,7 +58,7 @@ def sample_all(config, accelerator, pipeline, save_dir=None, img_save_dir=None):
             generate_dm_concave(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_save_dir)
 
         # ================================================================= #
-        # asyn
+        # asyndm
         generate_asyn(config, accelerator, pipeline, idx, prompt_embeds1_combine, cross_mask, img_save_dir)
 
         global_idx += config.sample.batch_size

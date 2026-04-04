@@ -14,6 +14,8 @@ from config.config import get_config
 from utils.utils import seed_everything
 from utils.setup import prepare_accelerator, prepare_pipeline, prepare_dataloaders, prepare_optimizer
 from finetuning.asyn import train_asyn
+from finetuning.asyndm import train_asyndm
+from finetuning.utils import FinetuneType
 from utils.sampling import encode_prompts_list
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
@@ -47,9 +49,14 @@ def main(config):
     train_dataloader = prepare_dataloaders(config, pipeline, accelerator)
     optimizer = prepare_optimizer(config, pipeline, accelerator)
 
-    # asyn
-    train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloader,
-               sample_neg_prompt_embeds=sample_neg_prompt_embeds)
+    if config.finetune.type == FinetuneType.Asyn:
+        # asyn
+        train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloader,
+                   sample_neg_prompt_embeds=sample_neg_prompt_embeds)
+    elif config.finetune.type == FinetuneType.AsynDM:
+        # asyndm
+        train_asyndm(config, accelerator, pipeline, optimizer, save_dir, train_dataloader,
+                     sample_neg_prompt_embeds=sample_neg_prompt_embeds)
 
 
 if __name__ == "__main__":

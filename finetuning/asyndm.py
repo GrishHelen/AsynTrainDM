@@ -1,20 +1,45 @@
 import gc
+import os
 import os.path
 from functools import partial
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import tqdm
 
 from diffusion.asyn_ddim_with_logprob import latents_encode
 from finetuning.eval import val_epoch
-from finetuning.utils import generate_timesteps_tensor, add_noise, predict_noise
+from finetuning.utils import add_noise, predict_noise
+from sampling.utils import func_prev_linear, func_prev_binary
 from utils.sampling import encode_prompts_list
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
 
-def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer, sample_neg_prompt_embeds):
+def compute_state_t(config, accelerator, pipeline, cross_mask, step):
+    initial_t = pipeline.scheduler.config.num_train_timesteps + pipeline.scheduler.config.steps_offset
+    initial_t = torch.tensor(initial_t, device=accelerator.device, dtype=torch.float32)
+    state_t = initial_t[None, None, None].expand(cross_mask.shape[0], 64, 64)
+
+    bg_mask = 1 - (cross_mask > 0.5).float()
+    state_prev_t_linear = func_prev_linear(pipeline, state_t, config.sample.num_steps)
+    prev_binary_val = func_prev_binary(config, pipeline, state_t, config.sample.num_steps, k=0.7)
+    state_prev_t_binary = cross_mask * prev_binary_val
+    state_t = (bg_mask * state_prev_t_linear + state_prev_t_binary).round().long()
+
+    for i in range(step):
+        state_prev_t_linear = func_prev_linear(pipeline, state_t, config.sample.num_steps - i - 1)
+        state_prev_t_binary = cross_mask * func_prev_binary(config, pipeline,
+                                                            state_t, config.sample.num_steps - i - 1,
+                                                            k=0.7)
+        state_prev_t = (bg_mask * state_prev_t_linear + state_prev_t_binary)
+        state_t = state_prev_t.round().long()
+
+    return state_t
+
+
+def train_epoch_asyndm(config, accelerator, pipeline, dataloader, optimizer, sample_neg_prompt_embeds, losses_save_dir):
     autocast = accelerator.autocast
     params_to_optimize = list(filter(lambda p: p.requires_grad, pipeline.unet.parameters()))
     pipeline.unet.train()
@@ -32,15 +57,16 @@ def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer, sampl
                     prompt_embeds1_combine = torch.cat([sample_neg_prompt_embeds[:latents.shape[0]],
                                                         batch["prompt_embeds"].to(accelerator.device)], dim=0)
 
-                    ts_tensor = generate_timesteps_tensor(pipeline, batch_size=latents.shape[0],
-                                                          type=config.finetune.ts_type)
+                    cross_mask = torch.tensor(batch['mask'], dtype=torch.float32)
+                    step = np.random.randint(0, config.sample.num_steps)
+                    state_t = compute_state_t(config, accelerator, pipeline, cross_mask, step)
                     noise = torch.randn_like(latents, device=accelerator.device)
 
                     # get noisy_latents from clear latents
-                    noisy_latents = add_noise(pipeline.scheduler, latents, noise, ts_tensor)
+                    noisy_latents = add_noise(pipeline.scheduler, latents, noise, state_t)
 
                 # predict noise
-                noise_pred = predict_noise(config, pipeline, noisy_latents, ts_tensor, prompt_embeds1_combine)
+                noise_pred = predict_noise(config, pipeline, noisy_latents, state_t, prompt_embeds1_combine)
 
                 loss = F.mse_loss(noise_pred, noise)
 
@@ -53,8 +79,8 @@ def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer, sampl
     return loss.item()
 
 
-def train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloader,
-               sample_neg_prompt_embeds=None):
+def train_asyndm(config, accelerator, pipeline, optimizer, save_dir, train_dataloader,
+                 sample_neg_prompt_embeds=None):
     best_model_path = None
     models_save_dir = os.path.join(save_dir, "models_state_dict/")
     eval_save_dir = os.path.join(save_dir, "eval_images/")
@@ -69,8 +95,8 @@ def train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloa
     for epoch in range(n_epochs):
         print(f'\nEpoch {epoch + 1}', flush=True)
 
-        train_loss = train_epoch_asyn(config, accelerator, pipeline, train_dataloader, optimizer,
-                                      sample_neg_prompt_embeds)
+        train_loss = train_epoch_asyndm(config, accelerator, pipeline, train_dataloader, optimizer,
+                                        sample_neg_prompt_embeds, save_dir)
 
         if epoch % config.logging.eval_epoch == 0:
             with torch.no_grad():
@@ -80,6 +106,7 @@ def train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloa
                     os.remove(best_model_path)
                 best_model_path = os.path.join(models_save_dir, f'model_{epoch + 1}.pth')
                 torch.save(pipeline.unet.state_dict(), best_model_path)
+
         if train_loss is None:
             return
 
