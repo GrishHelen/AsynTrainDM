@@ -5,7 +5,7 @@ import os
 
 import ml_collections
 
-from utils.utils import FinetuneTsType
+from finetuning.utils import FinetuneTsType
 
 
 def save_config(config):

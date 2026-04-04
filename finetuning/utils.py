@@ -1,9 +1,16 @@
 import os
+from enum import Enum
 
 import torch
 
 from model.unet_2d_condition import unet_asyn_forward
-from utils.utils import FinetuneTsType
+
+
+class FinetuneTsType(Enum):
+    CONST = 'constant'
+    CONST_DELTA = 'constant_delta'
+    BLOCK_2X2 = 'block_2x2'
+    RANDOM = 'random'
 
 
 def generate_timesteps_tensor(pipeline, batch_size, type: FinetuneTsType = FinetuneTsType.RANDOM):

@@ -281,6 +281,7 @@ def latents_encode(pipeline, images):
 
 
 def latents_decode(pipeline, latents, device, dtype):
+    latents = latents.to(pipeline.vae.dtype)
     image = pipeline.vae.decode(latents / pipeline.vae.config.scaling_factor, return_dict=False)[0]
     image, has_nsfw_concept = pipeline.run_safety_checker(image, device, dtype)
 
