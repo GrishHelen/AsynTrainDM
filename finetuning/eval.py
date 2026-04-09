@@ -10,6 +10,7 @@ tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
 
 def val_epoch(config, accelerator, pipeline, images_save_dir):
+    accelerator.is_local_main_process = False
     autocast = accelerator.autocast
     pipeline.unet.eval()
     with autocast():

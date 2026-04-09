@@ -1,9 +1,18 @@
 import argparse
+from enum import Enum
 
 import datasets
 from datasets import load_dataset
 
-from segmentation import config, masks_for_dataset
+from background_masking import background_masks_for_dataset
+from depth_masking import depth_masks_for_dataset
+from sam_masking import sam_config, sam_masks_for_dataset
+
+
+class MaskMethod(Enum):
+    DINO_SAM = 'dino_sam'
+    DEPTH_MAP = 'depth'
+    BACKGROUND = 'background'
 
 
 def count_words(prompt):
@@ -12,7 +21,8 @@ def count_words(prompt):
     return len(prompt.strip().split())
 
 
-def make_dataset(data_path, name, save_path, to_filter=True, max_samples=-1, make_masks=False):
+def make_dataset(data_path, name, save_path, to_filter=True, max_samples=-1, make_masks=False,
+                 mask_method=MaskMethod.DINO_SAM, batch_size=1):
     if data_path is None:
         return
     dataset = load_dataset(data_path, name, split='train')
@@ -26,7 +36,14 @@ def make_dataset(data_path, name, save_path, to_filter=True, max_samples=-1, mak
         dataset = dataset.train_test_split(train_size=max_samples, shuffle=False, seed=1234)['train']
 
     if make_masks:
-        masks = masks_for_dataset(dataset, config)
+        if mask_method == MaskMethod.DINO_SAM:
+            masks = sam_masks_for_dataset(dataset, sam_config)
+        elif mask_method == MaskMethod.DEPTH_MAP:
+            masks = depth_masks_for_dataset(dataset)
+        elif mask_method == MaskMethod.BACKGROUND:
+            masks = background_masks_for_dataset(dataset, batch_size=batch_size)
+        else:
+            raise NotImplementedError(f'Method to make object masks "{mask_method.value}" is not implemented')
         dataset_masks = datasets.Dataset.from_dict({"mask": masks})
         dataset = datasets.concatenate_datasets([dataset, dataset_masks], axis=1)
 
@@ -51,6 +68,18 @@ if __name__ == "__main__":
     parser.add_argument("--to_filter", type=int, default=1)
     parser.add_argument("--max_samples", type=int, default=-1)
     parser.add_argument("--make_masks", type=int, default=0)
+    parser.add_argument("--mask_method", type=str, default='dino_sam')
+    parser.add_argument("--batch_size", "--bs", type=int, default=1)
 
     args = parser.parse_args()
-    make_dataset(args.data_path, args.name, args.save_path, args.to_filter, args.max_samples, args.make_masks)
+    if args.mask_method == 'dino_sam':
+        make_dataset(args.data_path, args.name, args.save_path, args.to_filter, args.max_samples,
+                     args.make_masks, MaskMethod.DINO_SAM)
+    elif args.mask_method == 'depth':
+        make_dataset(args.data_path, args.name, args.save_path, args.to_filter, args.max_samples,
+                     args.make_masks, MaskMethod.DEPTH_MAP)
+    elif args.mask_method in ['background', 'bg']:
+        make_dataset(args.data_path, args.name, args.save_path, args.to_filter, args.max_samples,
+                     args.make_masks, MaskMethod.BACKGROUND, args.batch_size)
+    else:
+        raise ValueError(f'Unknown method to make object masks: {args.mask_method}')

@@ -39,10 +39,10 @@ def get_default_config():
     config.prompt = [
         "a rabbit playing basketball",
         "a white car and a red sheep",
-        "a cartoon style illustration of a macaw skating",
+        # "a cartoon style illustration of a macaw skating",
 
         "a cute ostrich on the chair",
-        "a penguin wearing a straw hat",
+        # "a penguin wearing a straw hat",
         "a blue cat and a gray rabbit",
     ]
     # prompt file
@@ -53,17 +53,17 @@ def get_default_config():
     config.item_idx = [
         [1, 3],
         [2, 6],
-        [6],
+        # [6],
 
         [2, 5],
-        [1, 5],
+        # [1, 5],
         [2, 6],
     ]  # [1,5,11][1,7,13][3,9][1,4][2,4]
     # item k in prompt
     config.item_k = [
-        [0.7, 0.7], [0.7, 0.7], [0.7],
+        [0.7, 0.7], [0.7, 0.7],  # [0.7],
 
-        [0.7, 0.7], [0.7, 0.7], [0.7, 0.7],
+        [0.7, 0.7], [0.7, 0.7],  # [0.7, 0.7],
     ]
     # use static or dynamic mask
     config.static_mask = 0
@@ -143,13 +143,13 @@ def get_config():
     parser.add_argument("--exp_name", "--exp", "--name", type=str, default=None)
     parser.add_argument("--generate_dm_concave", "--dm_concave", type=int, default=0)
     parser.add_argument("--generate_dm", "--dm", type=int, default=1)
-    parser.add_argument("--sample_batch_size", "--sample_bs", type=int, default=4)
 
     # config.pretrained args
     parser.add_argument("--pretrained_model", "--pretrained", type=str,
                         default="/home/ergrishina_2/.cache/huggingface/hub/models--Manojb--stable-diffusion-2-1-base/snapshots/repo/")
 
     # config.sample args
+    parser.add_argument("--sample_batch_size", "--sample_bs", type=int, default=4)
     parser.add_argument("--finetuned_model", "--finetuned", type=str, default=None)
 
     # config.finetune args
@@ -193,6 +193,7 @@ def get_config():
 
     # config.sample args
     config.sample.finetuned_model = args.finetuned_model
+    config.sample.batch_size = args.sample_batch_size
 
     # config.finetune args
     config.finetune.dataset_dir = args.finetune_dataset_dir

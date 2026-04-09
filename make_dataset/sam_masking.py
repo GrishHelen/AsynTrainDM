@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import List
 
-import numpy as np
 import spacy
 import torch
 from PIL import Image
@@ -15,7 +14,7 @@ from transformers import (
 
 
 @dataclass
-class MaskingConfig:
+class SamMaskingConfig:
     grounding_model_id: str = "IDEA-Research/grounding-dino-tiny"
     sam_model_id: str = "facebook/sam-vit-base"
     box_threshold: float = 0.35
@@ -27,19 +26,8 @@ class MaskingConfig:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def extract_objects(prompt: str, max_phrases: int) -> List[str]:
-    try:
-        doc = nlp(prompt)
-    except Exception as e:
-        print(f'ERROR, prompt: {prompt}')
-    objects = [chunk.text for chunk in doc.noun_chunks]
-    if max_phrases > 0:
-        objects = objects[:max_phrases]
-    return objects
-
-
-class PromptMaskAnnotator:
-    def __init__(self, config: MaskingConfig):
+class SamMasking:
+    def __init__(self, config: SamMaskingConfig):
         self.config = config
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
 
@@ -50,6 +38,18 @@ class PromptMaskAnnotator:
         self.sam_processor = SamProcessor.from_pretrained(config.sam_model_id)
         self.sam_model = SamModel.from_pretrained(config.sam_model_id).to(self.device)
         self.sam_model.eval()
+
+    @staticmethod
+    def extract_objects(prompt: str, max_phrases: int) -> List[str]:
+        try:
+            doc = nlp(prompt)
+        except Exception as ex:
+            print(f'ERROR, prompt: {prompt}')
+            raise ex
+        objects = [chunk.text for chunk in doc.noun_chunks]
+        if max_phrases > 0:
+            objects = objects[:max_phrases]
+        return objects
 
     def _predict_boxes(self, image: Image.Image, objects: List[str]) -> torch.Tensor:
         # Grounding DINO expects text input aligned with the image batch.
@@ -69,7 +69,7 @@ class PromptMaskAnnotator:
         boxes = result.get("boxes", torch.tensor([[0., 0., width, height]], dtype=torch.float32))
         box_scores = result.get("scores", torch.zeros((1,)))
 
-        if len(boxes) > self.config.max_boxes:
+        if len(boxes) > self.config.max_boxes and self.config.max_boxes > 0:
             order = torch.argsort(box_scores, descending=True)[: self.config.max_boxes]
             boxes = boxes[order]
 
@@ -99,7 +99,8 @@ class PromptMaskAnnotator:
             iou_scores = iou_scores[:, 0]
         masks = masks.float()
 
-        keep = iou_scores >= self.config.sam_iou_threshold
+        keep = (iou_scores >= self.config.sam_iou_threshold)
+        print(iou_scores.squeeze())
         if keep.any():
             final_mask = masks[keep].any(dim=0)
         else:
@@ -111,7 +112,7 @@ class PromptMaskAnnotator:
 
     @torch.inference_mode()
     def predict_mask(self, image: Image.Image, prompt: str) -> torch.Tensor:
-        objects = extract_objects(prompt, max_phrases=self.config.max_phrases)
+        objects = self.extract_objects(prompt, max_phrases=self.config.max_phrases)
         if len(objects) == 0:
             return self._fallback_mask(image)
 
@@ -126,11 +127,11 @@ class PromptMaskAnnotator:
         return torch.zeros((image.height, image.width), dtype=torch.float32)
 
 
-def masks_for_dataset(
+def sam_masks_for_dataset(
         dataset,
-        config: MaskingConfig,
+        config: SamMaskingConfig,
 ):
-    annotator = PromptMaskAnnotator(config)
+    mask_predictor = SamMasking(config)
     masks = []
 
     for idx in tqdm(range(len(dataset)), desc="Precomputing masks"):
@@ -138,7 +139,7 @@ def masks_for_dataset(
         image = item["image"].convert("RGB")
         prompt = item.get("prompt", "")
 
-        mask = annotator.predict_mask(image, prompt)
+        mask = mask_predictor.predict_mask(image, prompt)
         masks.append(mask)
 
     return masks
@@ -146,14 +147,14 @@ def masks_for_dataset(
 
 nlp = spacy.load("en_core_web_sm")
 
-config = MaskingConfig(
+sam_config = SamMaskingConfig(
     grounding_model_id="IDEA-Research/grounding-dino-tiny",
     sam_model_id="facebook/sam-vit-base",
     box_threshold=0.35,
     text_threshold=0.25,
-    sam_iou_threshold=0.85,
+    sam_iou_threshold=0.0,
     max_phrases=-1,
-    max_boxes=8,
+    max_boxes=-1,
     fallback_mode="full",
     device="cuda" if torch.cuda.is_available() else "cpu",
 )
