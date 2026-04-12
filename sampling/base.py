@@ -1,0 +1,197 @@
+import os
+from functools import partial
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+import tqdm
+from PIL import Image
+
+from diffusion.asyn_ddim_with_logprob import ddim_step_with_logprob, asyn_ddim_step_with_logprob, latents_decode
+from model.unet_2d_condition import unet_asyn_forward
+from .utils import get_item_idx_list, get_item_k_list, func_prev_binary
+
+tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
+
+
+def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_save_dir=None):
+    global_idx = idx * config.sample.batch_size
+    autocast = accelerator.autocast
+    prompt_idx = idx // config.sample.num_batches_per_epoch
+    if img_save_dir is None:
+        img_save_dir = os.path.join(accelerator.project_configuration.project_dir, "images/")
+    item_idx_list = get_item_idx_list(config, prompt_idx)
+    item_k_list = get_item_k_list(config, prompt_idx)
+
+    gs = [torch.Generator(device='cuda') for _ in range(config.sample.batch_size)]
+    for i, g in enumerate(gs):
+        g.manual_seed(config.seed + (idx % config.sample.num_batches_per_epoch) * config.sample.batch_size + i)
+    noise_latents1 = pipeline.prepare_latents(
+        config.sample.batch_size,
+        pipeline.unet.config.in_channels,  ## channels
+        pipeline.unet.config.sample_size * pipeline.vae_scale_factor,  ## height
+        pipeline.unet.config.sample_size * pipeline.vae_scale_factor,  ## width
+        prompt_embeds1_combine.dtype,
+        accelerator.device,
+        gs  ## generator
+    )
+
+    pipeline.scheduler.set_timesteps(config.sample.num_steps, device=accelerator.device)
+    # timestep_list = [i*pipeline.scheduler.config.num_train_timesteps//config.sample.num_steps+pipeline.scheduler.config.steps_offset for i in range(config.sample.num_steps)][::-1]
+    # print(timestep_list)
+    ts = pipeline.scheduler.timesteps
+
+    extra_step_kwargs = pipeline.prepare_extra_step_kwargs(gs, config.sample.eta)
+
+    latents_t = noise_latents1
+    cross_mask = []
+
+    for i, t in tqdm(
+            enumerate(ts),
+            desc="Timestep",
+            position=3,
+            leave=False,
+            disable=not accelerator.is_local_main_process,
+    ):
+        # sample
+
+        with autocast():
+            with torch.no_grad():
+                latents_input = torch.cat([latents_t] * 2) if config.sample.cfg else latents_t
+                latents_input = pipeline.scheduler.scale_model_input(latents_input, t)
+
+                noise_pred, extra_inf = unet_asyn_forward(pipeline.unet,
+                                                          latents_input,
+                                                          t,
+                                                          # concat_t,
+                                                          encoder_hidden_states=prompt_embeds1_combine,
+                                                          return_dict=False,
+                                                          extra_input={
+                                                              'used_layer_size': 16,
+                                                              'item_idx': item_idx_list
+                                                          },
+                                                          return_extra_inf=True,
+                                                          )
+                noise_pred = noise_pred[0]
+                if config.sample.cfg:
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + config.sample.guidance_scale * (
+                            noise_pred_text - noise_pred_uncond)
+                latents_t_1, _, latents_0 = ddim_step_with_logprob(pipeline.scheduler, noise_pred, i, latents_t,
+                                                                   **extra_step_kwargs)
+                latents_t = latents_t_1
+
+                cross_mask.append(extra_inf['cross_mask'])
+
+    cross_mask = torch.stack(cross_mask, dim=0).mean(dim=0)
+    mask_mean = config.mask_thr * cross_mask.mean(dim=1, keepdim=True)
+    cross_mask[cross_mask >= mask_mean] = 1
+    cross_mask[cross_mask < mask_mean] = 0
+
+    bsize, width_height, item_cnt = cross_mask.shape
+    width = int(width_height ** 0.5)
+    cross_mask = cross_mask.permute(0, 2, 1).reshape(bsize, item_cnt, width, width)
+    a_tensor = torch.tensor(item_k_list, dtype=torch.float32,
+                            device=cross_mask.device)  # shape: (item_cnt,)
+    a_tensor = a_tensor.view(1, item_cnt, 1, 1)  # shape: (1, item_cnt, 1, 1)
+    priority_masks = cross_mask * a_tensor  # (bsize, item_cnt, width, width)
+    _, max_idx = priority_masks.max(dim=1)  # shape: (bsize, width, width)
+    final_masks = torch.zeros_like(cross_mask)  # (bsize, item_cnt, width, width)
+    for i in range(item_cnt):
+        final_masks[:, i] = (max_idx == i).float() * cross_mask[:, i]
+    cross_mask = final_masks
+    cross_mask = F.interpolate(cross_mask, (64, 64))  # mode: nearest
+
+    if config.generate_dm:
+        images = latents_decode(pipeline, latents_t, accelerator.device, prompt_embeds1_combine.dtype).cpu().detach()
+
+        os.makedirs(img_save_dir, exist_ok=True)
+        for j, image in enumerate(images):
+            # print(image)
+            pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+            pil.save(os.path.join(img_save_dir, f"{(j + global_idx):05}_DM.png"))
+
+    if config.static_mask:
+        return cross_mask
+
+
+def generate_dm_concave(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_save_dir=None):
+    global_idx = idx * config.sample.batch_size
+    autocast = accelerator.autocast
+    prompt_idx = idx // config.sample.num_batches_per_epoch
+    if img_save_dir is None:
+        img_save_dir = os.path.join(accelerator.project_configuration.project_dir, "images/")
+    item_k_list = get_item_k_list(config, prompt_idx)
+
+    gs = [torch.Generator(device='cuda') for _ in range(config.sample.batch_size)]
+    for i, g in enumerate(gs):
+        g.manual_seed(config.seed + (idx % config.sample.num_batches_per_epoch) * config.sample.batch_size + i)
+    noise_latents1 = pipeline.prepare_latents(
+        config.sample.batch_size,
+        pipeline.unet.config.in_channels,  ## channels
+        pipeline.unet.config.sample_size * pipeline.vae_scale_factor,  ## height
+        pipeline.unet.config.sample_size * pipeline.vae_scale_factor,  ## width
+        prompt_embeds1_combine.dtype,
+        accelerator.device,
+        gs  ## generator
+    )
+
+    max_k = max(item_k_list)
+    initial_t = pipeline.scheduler.config.num_train_timesteps + pipeline.scheduler.config.steps_offset
+    # print(max_k, initial_t)
+    initial_t = torch.tensor(initial_t, device=accelerator.device, dtype=torch.float32)
+    state_t = initial_t[None, None, None].expand(config.sample.batch_size, 64, 64)
+    state_t = func_prev_binary(config, pipeline, state_t, config.sample.num_steps, k=max_k)
+    # print(state_t)
+
+    extra_step_kwargs = pipeline.prepare_extra_step_kwargs(gs, config.sample.eta)
+
+    latents_t = noise_latents1
+    for i in tqdm(
+            range(config.sample.num_steps),
+            desc="Timestep",
+            position=3,
+            leave=False,
+            disable=not accelerator.is_local_main_process,
+    ):
+        # sample
+
+        with autocast():
+            with torch.no_grad():
+                latents_input = torch.cat([latents_t] * 2) if config.sample.cfg else latents_t
+                latents_input = pipeline.scheduler.scale_model_input(latents_input)
+
+                # print(state_t)
+                concat_t = torch.cat([state_t.reshape(-1, 64 * 64)] * 2).round().long()
+                state_prev_t = func_prev_binary(config, pipeline,
+                                                state_t, config.sample.num_steps - i - 1, k=max_k)
+                # print(state_t, state_prev_t)
+
+                tensor_t = state_t[:, None].expand(config.sample.batch_size, 4, 64, 64).round().long()
+                tensor_prev_t = state_prev_t[:, None].expand(config.sample.batch_size, 4, 64, 64).round().long()
+
+                noise_pred = unet_asyn_forward(pipeline.unet,
+                                               latents_input,
+                                               # t,
+                                               concat_t,
+                                               encoder_hidden_states=prompt_embeds1_combine,
+                                               return_dict=False,
+                                               )
+                noise_pred = noise_pred[0]
+                if config.sample.cfg:
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + config.sample.guidance_scale * (
+                            noise_pred_text - noise_pred_uncond)
+                latents_t_1, _, latents_0 = asyn_ddim_step_with_logprob(pipeline.scheduler, noise_pred,
+                                                                        tensor_t, tensor_prev_t, latents_t,
+                                                                        **extra_step_kwargs)
+                latents_t = latents_t_1
+
+                state_t = state_prev_t
+
+    images = latents_decode(pipeline, latents_t, accelerator.device, prompt_embeds1_combine.dtype).cpu().detach()
+
+    os.makedirs(img_save_dir, exist_ok=True)
+    for j, image in enumerate(images):
+        pil = Image.fromarray((image.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+        pil.save(os.path.join(img_save_dir, f"{(j + global_idx):05}_dm_concave.png"))
