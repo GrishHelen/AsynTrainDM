@@ -100,7 +100,6 @@ class SamMasking:
         masks = masks.float()
 
         keep = (iou_scores >= self.config.sam_iou_threshold)
-        print(iou_scores.squeeze())
         if keep.any():
             final_mask = masks[keep].any(dim=0)
         else:
