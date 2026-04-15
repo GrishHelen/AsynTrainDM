@@ -21,11 +21,11 @@ def count_words(prompt):
     return len(prompt.strip().split())
 
 
-def make_dataset(data_path, name, save_path, to_filter=True, max_samples=-1, make_masks=False,
+def make_dataset(data_path, save_path, to_filter=True, max_samples=-1, make_masks=False,
                  mask_method=MaskMethod.DINO_SAM, batch_size=1):
     if data_path is None:
         return
-    dataset = load_dataset(data_path, name, split='train')
+    dataset = load_dataset(data_path, name=None, split='train')
     if ('prompt' not in dataset.column_names) and ('caption' in dataset.column_names):
         dataset = dataset.rename_column('caption', 'prompt')
     columns_to_remove = [col for col in dataset.column_names if col not in ['image', 'prompt']]
@@ -63,7 +63,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Parsing arguments from console")
 
     parser.add_argument("--data_path", type=str, default=None)
-    parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--save_path", type=str, default=None)
     parser.add_argument("--to_filter", type=int, default=1)
     parser.add_argument("--max_samples", type=int, default=-1)
@@ -73,13 +72,13 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     if args.mask_method == 'dino_sam':
-        make_dataset(args.data_path, args.name, args.save_path, args.to_filter, args.max_samples,
+        make_dataset(args.data_path, args.save_path, args.to_filter, args.max_samples,
                      args.make_masks, MaskMethod.DINO_SAM)
     elif args.mask_method == 'depth':
-        make_dataset(args.data_path, args.name, args.save_path, args.to_filter, args.max_samples,
+        make_dataset(args.data_path, args.save_path, args.to_filter, args.max_samples,
                      args.make_masks, MaskMethod.DEPTH_MAP)
     elif args.mask_method in ['background', 'bg']:
-        make_dataset(args.data_path, args.name, args.save_path, args.to_filter, args.max_samples,
+        make_dataset(args.data_path, args.save_path, args.to_filter, args.max_samples,
                      args.make_masks, MaskMethod.BACKGROUND, args.batch_size)
     else:
         raise ValueError(f'Unknown method to make object masks: {args.mask_method}')

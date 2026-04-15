@@ -111,7 +111,8 @@ def train_asyndm(config, accelerator, pipeline, optimizer, save_dir, train_datal
             return
 
         gc.collect()
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         accelerator.free_memory()
 
         print(f'\nCompleted epoch {epoch + 1}', flush=True)

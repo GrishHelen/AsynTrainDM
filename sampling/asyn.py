@@ -23,7 +23,7 @@ def generate_asyn(config, accelerator, pipeline, idx, prompt_embeds1_combine, cr
     item_idx_list = get_item_idx_list(config, prompt_idx)
     item_k_list = get_item_k_list(config, prompt_idx)
 
-    gs = [torch.Generator(device='cuda') for _ in range(config.sample.batch_size)]
+    gs = [torch.Generator(device='cuda' if torch.cuda.is_available() else 'cpu') for _ in range(config.sample.batch_size)]
     for i, g in enumerate(gs):
         g.manual_seed(config.seed + (idx % config.sample.num_batches_per_epoch) * config.sample.batch_size + i)
     noise_latents1 = pipeline.prepare_latents(
@@ -64,7 +64,7 @@ def generate_asyn(config, accelerator, pipeline, idx, prompt_embeds1_combine, cr
             desc="Timestep",
             position=3,
             leave=False,
-            disable=not accelerator.is_local_main_process,
+            disable=True,
     ):
         # sample
 
