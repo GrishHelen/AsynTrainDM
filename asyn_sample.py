@@ -26,6 +26,7 @@ def main(config):
         torch.cuda.set_device(config.dev_id)
 
     unique_id = config.exp_name if config.exp_name else datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
+    print(f'Sampling, experiment: {unique_id}')
     save_dir = os.path.join(config.save_path, unique_id)
 
     seed_everything(config.seed)
