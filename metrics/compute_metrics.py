@@ -42,23 +42,36 @@ def load_images_from_path(img_folder: str) -> Dict[str, List[Image.Image]]:
 def main():
     parser = argparse.ArgumentParser(description="Compute metrics for generated images")
     parser.add_argument("--metric", type=str, default='qwen')
+    parser.add_argument("--model_id", type=str, default=None)
     parser.add_argument("--img_folder", type=str, required=True)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--max_new_tokens", type=int, default=5)
+    parser.add_argument("--gen_method", type=str, default=None)
     args = parser.parse_args()
-    
+
     dataset = os.path.basename(args.img_folder)
     if dataset == '':
         dataset = os.path.basename(os.path.dirname(args.img_folder))
 
     print(f"Metric to compute: {args.metric}. Dataset: {dataset}. img_folder: {args.img_folder}'")
-    
+
     dataset = resolve_dataset_type(dataset)
     prompts = get_dataset_prompts(dataset)
 
     if args.metric == MetricType.QWEN.value:
         images_by_method = load_images_from_path(args.img_folder)
         scores_by_method = {}
+
+        if args.gen_method is not None:
+            if args.gen_method not in images_by_method.keys():
+                return
+            score = compute_qwen_score(
+                images_by_method[args.gen_method],
+                prompts,
+            )
+            scores_by_method[args.gen_method] = score
+            print(f'Method {args.gen_method}. Score: {score}')
+            return
 
         for method in images_by_method.keys():
             score = compute_qwen_score(
@@ -68,6 +81,7 @@ def main():
             scores_by_method[method] = score
             print(f'Method {method}. Score: {score}')
 
+        print(f"img_folder: {args.img_folder}")
         print(json.dumps(scores_by_method, indent=2))
         return scores_by_method
 

@@ -25,8 +25,10 @@ class QwenScoreEvaluator:
             device: str = "cuda",
             torch_dtype: Optional[torch.dtype] = None,
             max_new_tokens: int = 5,
+            model_id: Optional[str] = "Qwen/Qwen2.5-VL-7B-Instruct"
     ):
-        model_id = "Qwen/Qwen2.5-VL-7B-Instruct"
+        if model_id is None:
+            model_id = "Qwen/Qwen2.5-VL-7B-Instruct"
         self.device = device if torch.cuda.is_available() else 'cpu'
         self.max_new_tokens = max_new_tokens
         self.torch_dtype = torch_dtype
@@ -149,10 +151,12 @@ def compute_qwen_score(
         prompts: List[str],
         device: str = "cuda",
         max_new_tokens: int = 5,
+        model_id="Qwen/Qwen2.5-VL-7B-Instruct",
 ) -> float:
     evaluator = QwenScoreEvaluator(
         device=device,
         max_new_tokens=max_new_tokens,
+        model_id=model_id
     )
     avg_score = evaluator.evaluate(images, prompts)
     logger.info("QwenScore computed: %.2f", avg_score)
