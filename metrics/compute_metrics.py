@@ -11,6 +11,7 @@ from PIL import Image
 script_path = os.path.abspath(__file__)
 sys.path.append(os.path.dirname(os.path.dirname(script_path)))
 
+from metrics.clip_score import compute_clip_score
 from metrics.qwen_score import compute_qwen_score
 from metrics.gen_images import resolve_dataset_type, get_dataset_prompts
 
@@ -53,14 +54,14 @@ def main():
     if dataset == '':
         dataset = os.path.basename(os.path.dirname(args.img_folder))
 
-    print(f"Metric to compute: {args.metric}. Dataset: {dataset}. img_folder: {args.img_folder}'")
+    print(f"Metric to compute: {args.metric}. Dataset: {dataset}. img_folder: {args.img_folder}")
 
     dataset = resolve_dataset_type(dataset)
     prompts = get_dataset_prompts(dataset)
+    images_by_method = load_images_from_path(args.img_folder)
+    scores_by_method = {}
 
     if args.metric == MetricType.QWEN.value:
-        images_by_method = load_images_from_path(args.img_folder)
-        scores_by_method = {}
 
         if args.gen_method is not None:
             if args.gen_method not in images_by_method.keys():
@@ -68,6 +69,9 @@ def main():
             score = compute_qwen_score(
                 images_by_method[args.gen_method],
                 prompts,
+                device=args.device,
+                max_new_tokens=args.max_new_tokens,
+                model_id=args.model_id,
             )
             scores_by_method[args.gen_method] = score
             print(f'Method {args.gen_method}. Score: {score}')
@@ -77,6 +81,9 @@ def main():
             score = compute_qwen_score(
                 images_by_method[method],
                 prompts,
+                device=args.device,
+                max_new_tokens=args.max_new_tokens,
+                model_id=args.model_id,
             )
             scores_by_method[method] = score
             print(f'Method {method}. Score: {score}')
@@ -86,7 +93,35 @@ def main():
         return scores_by_method
 
     if args.metric == MetricType.CLIP.value:
-        raise NotImplementedError(f"Metric '{args.metric}' not implemented")
+
+        if args.gen_method is not None:
+            if args.gen_method not in images_by_method.keys():
+                return
+            score = compute_clip_score(
+                images_by_method[args.gen_method],
+                prompts,
+                device=args.device,
+                model_id=args.model_id,
+            )
+            scores_by_method[args.gen_method] = score
+            print(f'Method {args.gen_method}. Score: {score}')
+            return
+
+        for method in images_by_method.keys():
+            if len(images_by_method[method]) == 0:
+                continue
+            score = compute_clip_score(
+                images_by_method[method],
+                prompts,
+                device=args.device,
+                model_id=args.model_id,
+            )
+            scores_by_method[method] = score
+            print(f'Method {method}. Score: {score}')
+
+        print(f"img_folder: {args.img_folder}")
+        print(json.dumps(scores_by_method, indent=2))
+        return scores_by_method
 
     raise ValueError(f"Unknown metric '{args.metric}' to compute")
 
