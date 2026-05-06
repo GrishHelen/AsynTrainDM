@@ -70,7 +70,7 @@ def get_default_config():
     # item idx file
     config.item_idx_file = ""
     # whether generate base2 (DM concave)
-    config.generate_dm_concave = 1
+    config.generate_dm_concave = 0
     # whether generate base (DM)
     config.generate_dm = 1
     # batch begin index
@@ -93,22 +93,22 @@ def get_default_config():
     # classifier-free guidance weight. 1.0 is no guidance.
     sample.guidance_scale = 5.0
     # batch size (per GPU!) to use for sampling.
-    sample.batch_size = 8
+    sample.batch_size = 4
     # number of batches to sample per epoch. the total number of samples per epoch is `num_batches_per_epoch *
     # batch_size * num_gpus`.
     sample.num_batches_per_epoch = 1
     # whether to use classifier-free guidance
     sample.cfg = True
-    sample.finetuned_model = "/home/ergrishina_2/Diploma/results/AsynDM, finetune_3/models_state_dict/model__10.pth"
+    sample.finetuned_model = None
 
     ###### Fine-tuning ######
     config.finetune = finetune = ml_collections.ConfigDict()
-    finetune.dataset_dir = '/home/ergrishina_2/Diploma/diffusiondb'
+    finetune.dataset_dir = '/home/ergrishina_2/Diploma/laion'
     finetune.batch_size = 3
-    finetune.n_epochs = 40
+    finetune.n_epochs = 50
     finetune.max_batches = -1
-    finetune.lora_rank = 4
-    finetune.lora_alpha = 8
+    finetune.lora_rank = 32
+    finetune.lora_alpha = 64
     finetune.lora_dropout = 0.0
     finetune.max_grad_norm = 1.0
     finetune.grad_accumulation_steps = 1
@@ -120,7 +120,6 @@ def get_default_config():
 
     ###### Logging ######
     config.logging = logging = ml_collections.ConfigDict()
-    logging.batch = 50
     logging.epoch = 5
     logging.eval_epoch = 2
 

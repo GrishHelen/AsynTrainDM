@@ -39,7 +39,7 @@ def compute_state_t(config, accelerator, pipeline, cross_mask, step):
     return state_t
 
 
-def train_epoch_asyndm(config, accelerator, pipeline, dataloader, optimizer, sample_neg_prompt_embeds):
+def train_epoch_asyndm(config, accelerator, pipeline, dataloader, optimizer, sample_neg_prompt_embeds, epoch):
     autocast = accelerator.autocast
     params_to_optimize = list(filter(lambda p: p.requires_grad, pipeline.unet.parameters()))
     pipeline.unet.train()
@@ -96,7 +96,7 @@ def train_asyndm(config, accelerator, pipeline, optimizer, save_dir, train_datal
         print(f'\nEpoch {epoch + 1}', flush=True)
 
         train_loss = train_epoch_asyndm(config, accelerator, pipeline, train_dataloader, optimizer,
-                                        sample_neg_prompt_embeds)
+                                        sample_neg_prompt_embeds, epoch)
 
         if epoch % config.logging.eval_epoch == 0:
             with torch.no_grad():
