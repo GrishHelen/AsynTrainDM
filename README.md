@@ -1,5 +1,5 @@
-# Spatially-Adaptive Noise Scheduling for Diffusion Models / Пространственно-адаптивное расписание зашумления для диффузионных моделей
-## Гришина Елена, ВКР
+# Spatially-Adaptive Noise Scheduling for Diffusion Models / РџСЂРѕСЃС‚СЂР°РЅСЃС‚РІРµРЅРЅРѕ-Р°РґР°РїС‚РёРІРЅРѕРµ СЂР°СЃРїРёСЃР°РЅРёРµ Р·Р°С€СѓРјР»РµРЅРёСЏ РґР»СЏ РґРёС„С„СѓР·РёРѕРЅРЅС‹С… РјРѕРґРµР»РµР№
+## ГѓГ°ГЁГёГЁГ­Г  Г…Г«ГҐГ­Г , Г‚ГЉГђ
 
 ### Baseline
 [AsynDM](https://github.com/hu-zijing/AsynDM.git)
