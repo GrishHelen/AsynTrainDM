@@ -6,6 +6,7 @@ import os
 import ml_collections
 
 from finetuning.utils import FinetuneType, FinetuneTsType
+from finetuning.asyndm import FinetuneWarmupType
 
 
 def save_config(config):
@@ -117,6 +118,11 @@ def get_default_config():
     finetune.ts_type = FinetuneTsType.RANDOM
     finetune.use_masks = False
     finetune.type = FinetuneType.Asyn
+    finetune.item_k = 0.7
+
+    finetune.schedule_warmup = ml_collections.ConfigDict()
+    finetune.schedule_warmup.n_epochs = 0
+    finetune.schedule_warmup.type = FinetuneWarmupType.POLYNOM # polynom / mixture
 
     ###### Logging ######
     config.logging = logging = ml_collections.ConfigDict()
@@ -165,6 +171,10 @@ def get_config():
     parser.add_argument("--finetune_ts_type", type=str, default=None)
     parser.add_argument("--finetune_use_mask", type=int, default=0)
     parser.add_argument("--finetune_type", type=str, default='asyn')
+    parser.add_argument("--finetune_item_k", type=float, default=0.7)
+    
+    parser.add_argument("--finetune_warmup_epochs", type=int, default=0)
+    parser.add_argument("--finetune_warmup_type", type=str, default='polynom')
 
     # config.logging args
     parser.add_argument("--log_epoch", type=int, default=5)
@@ -222,6 +232,15 @@ def get_config():
         config.finetune.type = FinetuneType.Asyn
     elif args.finetune_type == 'asyndm':
         config.finetune.type = FinetuneType.AsynDM
+    config.finetune.item_k = args.finetune_item_k
+    
+    config.finetune.schedule_warmup.n_epochs = args.finetune_warmup_epochs
+    if args.finetune_warmup_type == 'polynom':
+        config.finetune.schedule_warmup.type = FinetuneWarmupType.POLYNOM
+    elif args.finetune_warmup_type == 'mixture':
+        config.finetune.schedule_warmup.type = FinetuneWarmupType.MIXTURE
+    else:
+        raise ValueError(f'Unknown schedule_warmup type: {args.finetune_warmup_type}')
 
     # config.logging args
     config.logging.epoch = args.log_epoch

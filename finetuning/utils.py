@@ -20,7 +20,7 @@ class FinetuneType(Enum):
 
 def generate_timesteps_tensor(pipeline, batch_size, type: FinetuneTsType = FinetuneTsType.RANDOM):
     device = pipeline.unet.device
-    ts = pipeline.scheduler.timesteps.to(device)  # [T...0]
+    ts = pipeline.scheduler.timesteps.to(device)  # [T-1...0]
     res_shape = (batch_size, 64, 64)
 
     if type == FinetuneTsType.RANDOM:

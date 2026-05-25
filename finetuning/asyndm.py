@@ -2,6 +2,7 @@ import gc
 import os
 import os.path
 from functools import partial
+from enum import Enum
 
 import numpy as np
 import torch
@@ -16,26 +17,47 @@ from utils.sampling import encode_prompts_list
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
+class FinetuneWarmupType(Enum):
+    POLYNOM = 'polynom'
+    MIXTURE = 'mixture'
 
-def compute_state_t(config, accelerator, pipeline, cross_mask, step):
+def compute_state_t(config, accelerator, pipeline, cross_mask, step, epoch):
+    def mix_schedules(linear, concave, bg_mask):
+        if epoch >= config.finetune.schedule_warmup.n_epochs:
+            state_t = (bg_mask * linear + (1 - bg_mask) * concave)
+            return state_t
+        
+        if config.finetune.schedule_warmup.type == FinetuneWarmupType.POLYNOM:
+            p = 1 + (epoch / config.finetune.schedule_warmup.n_epochs)
+            # TODO
+            raise NotImplementedError(f'Schedule_warmup type {config.finetune.schedule_warmup.type.value} not implemented')
+        elif config.finetune.schedule_warmup.type == FinetuneWarmupType.MIXTURE:
+            mix_coeff = epoch / config.finetune.schedule_warmup.n_epochs
+            concave_mixed = (1 - mix_coeff) * linear + mix_coeff * concave
+            state_t = (bg_mask * linear + (1 - bg_mask) * concave_mixed)
+            return state_t
+        else:
+            raise NotImplementedError(f'Schedule_warmup type {config.finetune.schedule_warmup.type.value} not implemented')
+    
     initial_t = pipeline.scheduler.config.num_train_timesteps + pipeline.scheduler.config.steps_offset
     initial_t = torch.tensor(initial_t, device=accelerator.device, dtype=torch.float32)
     state_t = initial_t[None, None, None].expand(cross_mask.shape[0], 64, 64)
 
     bg_mask = 1 - (cross_mask > 0.5).float()
-    state_prev_t_linear = func_prev_linear(pipeline, state_t, config.sample.num_steps)
-    prev_binary_val = func_prev_binary(config, pipeline, state_t, config.sample.num_steps, k=0.7)
-    state_prev_t_binary = cross_mask * prev_binary_val
-    state_t = (bg_mask * state_prev_t_linear + state_prev_t_binary).round().long()
+    state_prev_t_linear = func_prev_linear(pipeline, state_t, pipeline.scheduler.config.num_train_timesteps)
+    state_prev_t_binary = func_prev_binary(config, pipeline, state_t, pipeline.scheduler.config.num_train_timesteps, 
+                                           k=config.finetune.item_k)
+    state_t = mix_schedules(state_prev_t_linear, state_prev_t_binary, bg_mask).round().long()
+    
 
     for i in range(step):
-        state_prev_t_linear = func_prev_linear(pipeline, state_t, config.sample.num_steps - i - 1)
-        state_prev_t_binary = cross_mask * func_prev_binary(config, pipeline,
-                                                            state_t, config.sample.num_steps - i - 1,
-                                                            k=0.7)
-        state_prev_t = (bg_mask * state_prev_t_linear + state_prev_t_binary)
-        state_t = state_prev_t.round().long()
+        state_prev_t_linear = func_prev_linear(pipeline, state_t, pipeline.scheduler.config.num_train_timesteps - i - 1)
+        state_prev_t_binary = func_prev_binary(config, pipeline,
+                                                state_t, pipeline.scheduler.config.num_train_timesteps - i - 1,
+                                                k=config.finetune.item_k)
+        state_t = mix_schedules(state_prev_t_linear, state_prev_t_binary, bg_mask).round().long()
 
+    state_t = torch.clamp(state_t, min=0, max=pipeline.scheduler.config.num_train_timesteps - 1)
     return state_t
 
 
@@ -58,8 +80,8 @@ def train_epoch_asyndm(config, accelerator, pipeline, dataloader, optimizer, sam
                                                         batch["prompt_embeds"].to(accelerator.device)], dim=0)
 
                     cross_mask = torch.tensor(batch['mask'], dtype=torch.float32)
-                    step = np.random.randint(0, config.sample.num_steps)
-                    state_t = compute_state_t(config, accelerator, pipeline, cross_mask, step)
+                    step = np.random.randint(0, pipeline.scheduler.config.num_train_timesteps)
+                    state_t = compute_state_t(config, accelerator, pipeline, cross_mask, step, epoch)
                     noise = torch.randn_like(latents, device=accelerator.device)
 
                     # get noisy_latents from clear latents
