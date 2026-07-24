@@ -110,6 +110,8 @@ def generate_images(config_path: str, dataset_type: str):
 
     config.prompt = get_dataset_prompts(dataset_type)
     config.item_idx, config.item_k = get_dataset_items(dataset_type, config.prompt)
+    config.prompt_file = ""
+    config.item_idx_file = ""
 
     if config.allow_tf32 and torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -123,7 +125,7 @@ def main():
     parser.add_argument("--config_path", type=str, required=True)
     parser.add_argument("--dataset_type", "--dataset", dest="dataset_type", type=str, required=True,
                         help=f"Dataset name from config/prompt. Available datasets: {available_datasets}",
-    )
+                        )
     args = parser.parse_args()
     generate_images(args.config_path, args.dataset_type)
 

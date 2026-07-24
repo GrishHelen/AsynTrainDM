@@ -5,13 +5,16 @@ import numpy as np
 import torch
 
 cur_dir = os.path.curdir
-parent_dir = os.path.abspath(os.path.join(cur_dir, "../.."))
+parent_dir = os.path.abspath(os.path.join(cur_dir, ".."))
 
 # Add it to the system path
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from depth_anything_3.api import DepthAnything3
+try:
+    from depth_anything_3.api import DepthAnything3
+except ImportError:
+    DepthAnything3 = None
 from tqdm import tqdm
 
 
@@ -19,6 +22,8 @@ class DA3MaskEstimator:
     def __init__(self, model_id="depth-anything/da3-small", device="cuda"):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
 
+        if DepthAnything3 is None:
+            raise ImportError("ModuleNotFoundError: No module named 'depth_anything_3'")
         self.model = DepthAnything3.from_pretrained(model_id).to(self.device)
         self.model.eval()
 

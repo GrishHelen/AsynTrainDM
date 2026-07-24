@@ -46,15 +46,19 @@ def compute_state_t(config, accelerator, pipeline, cross_mask, step, epoch):
     bg_mask = 1 - (cross_mask > 0.5).float()
     state_prev_t_linear = func_prev_linear(pipeline, state_t, pipeline.scheduler.config.num_train_timesteps)
     state_prev_t_binary = func_prev_binary(config, pipeline, state_t, pipeline.scheduler.config.num_train_timesteps, 
-                                           k=config.finetune.item_k)
+                                           k=config.finetune.item_k,
+                                           x_scaling=pipeline.scheduler.config.num_train_timesteps,
+                                           y_scaling=pipeline.scheduler.config.num_train_timesteps)
     state_t = mix_schedules(state_prev_t_linear, state_prev_t_binary, bg_mask).round().long()
-    
+
 
     for i in range(step):
         state_prev_t_linear = func_prev_linear(pipeline, state_t, pipeline.scheduler.config.num_train_timesteps - i - 1)
         state_prev_t_binary = func_prev_binary(config, pipeline,
                                                 state_t, pipeline.scheduler.config.num_train_timesteps - i - 1,
-                                                k=config.finetune.item_k)
+                                                k=config.finetune.item_k,
+                                                x_scaling=pipeline.scheduler.config.num_train_timesteps,
+                                                y_scaling=pipeline.scheduler.config.num_train_timesteps)
         state_t = mix_schedules(state_prev_t_linear, state_prev_t_binary, bg_mask).round().long()
 
     state_t = torch.clamp(state_t, min=0, max=pipeline.scheduler.config.num_train_timesteps - 1)
@@ -65,6 +69,7 @@ def train_epoch_asyndm(config, accelerator, pipeline, dataloader, optimizer, sam
     autocast = accelerator.autocast
     params_to_optimize = list(filter(lambda p: p.requires_grad, pipeline.unet.parameters()))
     pipeline.unet.train()
+    state_stat = [1e7,-1e7,0, 0] # min, max, sum, cnt  
 
     for i, batch in enumerate(dataloader):
         if i == config.finetune.max_batches:
@@ -82,6 +87,10 @@ def train_epoch_asyndm(config, accelerator, pipeline, dataloader, optimizer, sam
                     cross_mask = torch.tensor(batch['mask'], dtype=torch.float32)
                     step = np.random.randint(0, pipeline.scheduler.config.num_train_timesteps)
                     state_t = compute_state_t(config, accelerator, pipeline, cross_mask, step, epoch)
+                    state_stat = [min(state_stat[0], torch.min(state_t)), 
+                                  max(state_stat[1], torch.max(state_t)),
+                                  state_stat[2] + torch.sum(state_t),
+                                  state_stat[3] + state_t.shape[0]]
                     noise = torch.randn_like(latents, device=accelerator.device)
 
                     # get noisy_latents from clear latents
@@ -98,6 +107,8 @@ def train_epoch_asyndm(config, accelerator, pipeline, dataloader, optimizer, sam
                 optimizer.step()
                 optimizer.zero_grad()
 
+    print(f'state_t. min: {round(float(state_stat[0]), 3)}, max: {round(float(state_stat[1]), 3)}, \
+          mean: {round(float(state_stat[2]/state_stat[3]), 3)}')
     return loss.item()
 
 

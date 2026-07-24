@@ -148,6 +148,8 @@ def get_config():
     parser.add_argument("--exp_name", "--exp", "--name", type=str, default=None)
     parser.add_argument("--generate_dm_concave", "--dm_concave", type=int, default=0)
     parser.add_argument("--generate_dm", "--dm", type=int, default=1)
+    parser.add_argument("--prompt_file", type=str, default="")
+    parser.add_argument("--items_file", type=str, default="")
 
     # config.pretrained args
     parser.add_argument("--pretrained_model", "--pretrained", type=str,
@@ -198,11 +200,13 @@ def get_config():
     config.generate_dm = args.generate_dm
 
     # config.pretrained args
-    config.pretrained.pretrained_model = args.pretrained_model
+    config.pretrained.model = args.pretrained_model
 
     # config.sample args
     config.sample.finetuned_model = args.finetuned_model
     config.sample.batch_size = args.sample_batch_size
+    config.prompt_file = args.prompt_file
+    config.item_idx_file = args.items_file
 
     # config.finetune args
     config.finetune.dataset_dir = args.finetune_dataset_dir

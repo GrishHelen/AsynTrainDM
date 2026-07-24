@@ -62,6 +62,7 @@ def main():
     scores_by_method = {}
 
     if args.metric == MetricType.QWEN.value:
+        print(f'Metric: {MetricType.QWEN.value}')
 
         if args.gen_method is not None:
             if args.gen_method not in images_by_method.keys():
@@ -93,6 +94,7 @@ def main():
         return scores_by_method
 
     if args.metric == MetricType.CLIP.value:
+        print(f'Metric: {MetricType.CLIP.value}')
 
         if args.gen_method is not None:
             if args.gen_method not in images_by_method.keys():

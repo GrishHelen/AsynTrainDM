@@ -44,6 +44,7 @@ class QwenScoreEvaluator:
             self.torch_dtype,
         )
         self.model = AutoModelForImageTextToText.from_pretrained(model_id, trust_remote_code=True).to(self.device)
+        self.model.eval()
 
         self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
         logger.info("Model and processor loaded successfully.")
