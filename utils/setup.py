@@ -144,7 +144,7 @@ def prepare_dataloaders(config, pipeline, accelerator):
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
         transforms.ConvertImageDtype(pipeline.vae.dtype),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     ])
     text_transform = lambda prompt: torch.squeeze(encode_prompts_list(pipeline, device, [prompt]))
 

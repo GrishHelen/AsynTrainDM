@@ -54,28 +54,23 @@ def add_noise(scheduler, original_samples, noise, timesteps):
     return noisy_samples
 
 
-def predict_noise(config, pipeline, noisy_latents, timesteps, prompt_embeds1_combine):
-    latents_input = torch.cat([noisy_latents] * 2) if config.sample.cfg else noisy_latents
+def predict_noise(config, pipeline, noisy_latents, timesteps, prompt_embeds):
+    latents_input = noisy_latents
     latents_input = pipeline.scheduler.scale_model_input(latents_input)
 
-    concat_t = torch.cat([timesteps.reshape(-1, 64 * 64)] * 2).round().long()
+    concat_t = timesteps.reshape(-1, 64 * 64).round().long()
 
     noise_pred = unet_asyn_forward(pipeline.unet,
                                    latents_input,
                                    # t,
                                    concat_t,
-                                   encoder_hidden_states=prompt_embeds1_combine,
+                                   encoder_hidden_states=prompt_embeds,
                                    return_dict=False,
                                    extra_input={
                                        'used_layer_size': 16,
                                    },
                                    )
     noise_pred = noise_pred[0]
-
-    if config.sample.cfg:
-        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-        noise_pred = noise_pred_uncond + config.sample.guidance_scale * (
-                noise_pred_text - noise_pred_uncond)
 
     return noise_pred
 

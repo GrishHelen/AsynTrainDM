@@ -16,7 +16,6 @@ from utils.setup import prepare_accelerator, prepare_pipeline, prepare_dataloade
 from finetuning.asyn import train_asyn
 from finetuning.asyndm import train_asyndm
 from finetuning.utils import FinetuneType
-from utils.sampling import encode_prompts_list
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -42,21 +41,15 @@ def main(config):
     if config.allow_tf32 and torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
 
-    # generate negative prompt embeddings
-    neg_prompt_embed = encode_prompts_list(pipeline, accelerator.device, [""])
-    sample_neg_prompt_embeds = neg_prompt_embed.repeat(config.finetune.batch_size, 1, 1)
-
     train_dataloader = prepare_dataloaders(config, pipeline, accelerator)
     optimizer = prepare_optimizer(config, pipeline, accelerator)
 
     if config.finetune.type == FinetuneType.Asyn:
         # asyn
-        train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloader,
-                   sample_neg_prompt_embeds=sample_neg_prompt_embeds)
+        train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloader)
     elif config.finetune.type == FinetuneType.AsynDM:
         # asyndm
-        train_asyndm(config, accelerator, pipeline, optimizer, save_dir, train_dataloader,
-                     sample_neg_prompt_embeds=sample_neg_prompt_embeds)
+        train_asyndm(config, accelerator, pipeline, optimizer, save_dir, train_dataloader)
 
 
 if __name__ == "__main__":

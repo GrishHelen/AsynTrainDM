@@ -9,12 +9,11 @@ import tqdm
 from diffusion.asyn_ddim_with_logprob import latents_encode
 from finetuning.eval import val_epoch
 from finetuning.utils import generate_timesteps_tensor, add_noise, predict_noise
-from utils.sampling import encode_prompts_list
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
 
-def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer, sample_neg_prompt_embeds):
+def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer):
     autocast = accelerator.autocast
     params_to_optimize = list(filter(lambda p: p.requires_grad, pipeline.unet.parameters()))
     pipeline.unet.train()
@@ -28,9 +27,7 @@ def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer, sampl
                     # get clear latents from clear images
                     latents = latents_encode(pipeline, batch["image"].to(accelerator.device))
 
-                    # generate prompts
-                    prompt_embeds1_combine = torch.cat([sample_neg_prompt_embeds[:latents.shape[0]],
-                                                        batch["prompt_embeds"].to(accelerator.device)], dim=0)
+                    prompt_embeds = batch["prompt_embeds"].to(accelerator.device)
 
                     ts_tensor = generate_timesteps_tensor(pipeline, batch_size=latents.shape[0],
                                                           type=config.finetune.ts_type)
@@ -40,7 +37,7 @@ def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer, sampl
                     noisy_latents = add_noise(pipeline.scheduler, latents, noise, ts_tensor)
 
                 # predict noise
-                noise_pred = predict_noise(config, pipeline, noisy_latents, ts_tensor, prompt_embeds1_combine)
+                noise_pred = predict_noise(config, pipeline, noisy_latents, ts_tensor, prompt_embeds)
 
                 loss = F.mse_loss(noise_pred, noise)
 
@@ -53,24 +50,18 @@ def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer, sampl
     return loss.item()
 
 
-def train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloader,
-               sample_neg_prompt_embeds=None):
+def train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloader):
     best_model_path = None
     models_save_dir = os.path.join(save_dir, "models_state_dict/")
     eval_save_dir = os.path.join(save_dir, "eval_images/")
     os.makedirs(models_save_dir, exist_ok=True)
     os.makedirs(eval_save_dir, exist_ok=True)
 
-    if sample_neg_prompt_embeds is None:
-        neg_prompt_embed = encode_prompts_list(pipeline, accelerator.device, [""])
-        sample_neg_prompt_embeds = neg_prompt_embed.repeat(config.finetune.batch_size, 1, 1)
-
     n_epochs = config.finetune.n_epochs
     for epoch in range(n_epochs):
         print(f'\nEpoch {epoch + 1}', flush=True)
 
-        train_loss = train_epoch_asyn(config, accelerator, pipeline, train_dataloader, optimizer,
-                                      sample_neg_prompt_embeds)
+        train_loss = train_epoch_asyn(config, accelerator, pipeline, train_dataloader, optimizer)
 
         if epoch % config.logging.eval_epoch == 0:
             with torch.no_grad():
