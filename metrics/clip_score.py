@@ -38,7 +38,7 @@ class CLIPScoreEvaluator:
         self.batch_size = batch_size
         self.torch_dtype = torch_dtype
 
-        model_kwargs = {}
+        model_kwargs = {"use_safetensors": True, "local_files_only": True}
         if self.torch_dtype is not None:
             model_kwargs["torch_dtype"] = self.torch_dtype
 

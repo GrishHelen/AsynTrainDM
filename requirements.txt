@@ -10,7 +10,7 @@ libtiff==0.4.2
 matplotlib==3.9.4
 ml_collections==0.1.1
 moviepy==2.2.1
-numpy
+numpy==1.26.4
 pandas==2.0.2
 peft==0.17.1
 pillow==11.3.0

@@ -59,6 +59,7 @@ def sample_all(config, accelerator, pipeline, save_dir=None, img_save_dir=None):
 
         # ================================================================= #
         # asyndm
-        generate_asyn(config, accelerator, pipeline, idx, prompt_embeds1_combine, cross_mask, img_save_dir)
+        generate_asyn(config, accelerator, pipeline, idx, prompt_embeds1_combine, cross_mask, img_save_dir,
+                      prompt=prompt_list[prompt_idx])
 
         global_idx += config.sample.batch_size

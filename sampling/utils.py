@@ -5,6 +5,63 @@ import torch
 
 torch.cuda.is_available()
 
+
+def tokenizer_input_ids_without_special_tokens(tokenizer, text):
+    if not text:
+        return []
+    return tokenizer(text, add_special_tokens=False)["input_ids"]
+
+
+def item_word_indices_to_token_groups(tokenizer, prompt, item_idx_list):
+    words = prompt.split()
+    max_content_tokens = tokenizer.model_max_length - 2
+    token_groups = []
+
+    for item_idx in item_idx_list:
+        word_idx = int(item_idx)
+        if word_idx < 0 or word_idx >= len(words):
+            token_groups.append([])
+            continue
+
+        prefix = " ".join(words[:word_idx])
+        prefix_with_word = " ".join(words[:word_idx + 1])
+        start = len(tokenizer_input_ids_without_special_tokens(tokenizer, prefix))
+        end = len(tokenizer_input_ids_without_special_tokens(tokenizer, prefix_with_word))
+        token_group = [token_idx for token_idx in range(start, end) if token_idx < max_content_tokens]
+        token_groups.append(token_group)
+
+    return token_groups
+
+
+def item_word_labels(prompt, item_idx_list, token_groups=None):
+    words = prompt.split()
+    labels = []
+    for label_idx, item_idx in enumerate(item_idx_list):
+        word_idx = int(item_idx)
+        word = words[word_idx] if 0 <= word_idx < len(words) else ""
+        token_group = token_groups[label_idx] if token_groups is not None else []
+        if len(token_group) == 1:
+            token_part = f"tok={token_group[0]}"
+        elif len(token_group) > 1:
+            token_part = f"tok={token_group[0]}-{token_group[-1]}"
+        else:
+            token_part = "tok=truncated"
+
+        if word:
+            labels.append(f"word={word_idx}: {word} ({token_part})")
+        else:
+            labels.append(f"word={word_idx} ({token_part})")
+    return labels
+
+
+def get_prompt_from_config(config, prompt_idx):
+    if len(config.prompt_file) != 0:
+        with open(config.prompt_file, "r", encoding="utf-8") as f:
+            prompt_list = json.load(f)
+        return prompt_list[prompt_idx]
+    return config.prompt if isinstance(config.prompt, str) else config.prompt[prompt_idx]
+
+
 def get_item_idx_list(config, prompt_idx):
     if len(config.item_idx_file) != 0:
         with open(config.item_idx_file, 'r') as f:
@@ -34,6 +91,13 @@ def get_item_k_list(config, prompt_idx):
                 item_k_list = temp_list["item_k"][config.prompt[prompt_idx]]
     else:
         item_k_list = config.item_k if isinstance(config.prompt, str) else config.item_k[prompt_idx]
+
+    sample_item_k = config.sample.get("item_k", None)
+    if sample_item_k is not None:
+        sample_item_k = float(sample_item_k)
+        if not 0.0 <= sample_item_k <= 1.0:
+            raise ValueError(f"sample.item_k must be in [0, 1], got {sample_item_k}")
+        item_k_list = [sample_item_k] * len(item_k_list)
     return item_k_list
 
 
@@ -65,6 +129,9 @@ def func_prev_binary(
         x_scaling = config.sample.num_steps
     if y_scaling is None:
         y_scaling = pipeline.scheduler.config.num_train_timesteps
+
+    if k == 0:
+        return func_prev_linear(pipeline, state_t, rest_step, target_value=target_value)
 
     if rest_step == 0:
         state_prev_t = torch.zeros_like(state_t)

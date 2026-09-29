@@ -1,8 +1,9 @@
 import argparse
 import json
 import os
+import re
 import sys
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 from ml_collections import ConfigDict
@@ -11,10 +12,15 @@ script_path = os.path.abspath(__file__)
 project_root = os.path.dirname(os.path.dirname(script_path))
 sys.path.append(project_root)
 
-from sampling.all import sample_all
-from utils.setup import prepare_accelerator, prepare_pipeline
-
 PROMPT_CONFIG_DIR = os.path.join(project_root, 'config', 'prompt')
+
+
+def resolve_config_path(config_path: str) -> str:
+    if os.path.isdir(config_path):
+        config_path = os.path.join(config_path, 'config.json')
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    return config_path
 
 
 def json_to_configdict(json_path: str) -> ConfigDict:
@@ -45,6 +51,7 @@ def get_available_datasets() -> Dict[str, str]:
 
 
 def resolve_dataset_type(dataset_type: str) -> str:
+    dataset_type = re.sub(r",\s*k=[^,]+$", "", dataset_type, flags=re.IGNORECASE).strip()
     dataset_map = get_available_datasets()
     resolved_dataset_type = dataset_map.get(dataset_type.lower())
     if resolved_dataset_type is None:
@@ -94,17 +101,93 @@ def get_dataset_items(dataset_type: str, prompts: List[str]) -> Tuple[List[List[
     return item_idx, item_k
 
 
-def generate_images(config_path: str, dataset_type: str):
+def resolve_finetuned_model_path(config: ConfigDict, exp_dir: str, exp_name: str, finetuned_model: Optional[str] = None):
+    if finetuned_model is not None:
+        return finetuned_model
+    if 'base' in exp_name.lower():
+        return None
+
+    models_dir = os.path.join(exp_dir, 'models_state_dict')
+    n_epochs = int(config.finetune.n_epochs) if 'finetune' in config and 'n_epochs' in config.finetune else None
+    if n_epochs is not None:
+        epoch_model = os.path.join(models_dir, f'model_{n_epochs}.pth')
+        if os.path.exists(epoch_model):
+            return epoch_model
+
+    if os.path.isdir(models_dir):
+        model_candidates = []
+        for filename in os.listdir(models_dir):
+            match = re.fullmatch(r'model_(\d+)\.pth', filename)
+            if match:
+                model_candidates.append((int(match.group(1)), os.path.join(models_dir, filename)))
+        if model_candidates:
+            return max(model_candidates, key=lambda item: item[0])[1]
+
+    fallback = os.path.join(models_dir, 'model_50.pth')
+    raise FileNotFoundError(
+        f"Could not find finetuned checkpoint. Expected '{fallback}' or another 'model_*.pth' in '{models_dir}'. "
+        "Pass --finetuned_model explicitly if the checkpoint is stored elsewhere."
+    )
+
+
+def apply_attention_grid_options(
+        config: ConfigDict,
+        save_attn_grids: bool,
+        attn_grid_every: Optional[int],
+        attn_grid_cell_size: Optional[int],
+        mask_thr: Optional[float],
+):
+    config.sample.save_attn_grids = bool(save_attn_grids)
+    if attn_grid_every is not None:
+        config.sample.attn_grid_every = attn_grid_every
+    elif 'attn_grid_every' not in config.sample:
+        config.sample.attn_grid_every = 5
+
+    if attn_grid_cell_size is not None:
+        config.sample.attn_grid_cell_size = attn_grid_cell_size
+    elif 'attn_grid_cell_size' not in config.sample:
+        config.sample.attn_grid_cell_size = 192
+
+    if mask_thr is not None:
+        config.mask_thr = mask_thr
+
+
+def generate_images(
+        config_path: str,
+        dataset_type: str,
+        finetuned_model=None,
+        save_attn_grids=False,
+        attn_grid_every=None,
+        attn_grid_cell_size=None,
+        mask_thr=None,
+        asyn_k=None,
+):
+    config_path = resolve_config_path(config_path)
     dataset_type = resolve_dataset_type(dataset_type)
     exp_dir = os.path.dirname(config_path)
     exp_name = os.path.basename(exp_dir)
-    save_dir = os.path.join(exp_dir, dataset_type)
-    print(f'Generate {dataset_type}, experiment: {exp_name}')
 
     config = json_to_configdict(config_path)
     config.sample.batch_size = 1
-    if 'base' not in exp_name:
-        config.sample.finetuned_model = os.path.join(exp_dir, 'models_state_dict/model_50.pth')
+    config.sample.finetuned_model = resolve_finetuned_model_path(config, exp_dir, exp_name, finetuned_model)
+    apply_attention_grid_options(config, save_attn_grids, attn_grid_every, attn_grid_cell_size, mask_thr)
+    if asyn_k is not None:
+        asyn_k = float(asyn_k)
+        if not 0.0 <= asyn_k <= 1.0:
+            raise ValueError(f"asyn_k must be in [0, 1], got {asyn_k}")
+        config.sample.item_k = asyn_k
+
+    effective_item_k = config.sample.get("item_k", None)
+    if effective_item_k is None:
+        output_dir_name = dataset_type
+    else:
+        output_dir_name = f"{dataset_type}, k={float(effective_item_k):g}"
+    save_dir = os.path.join(exp_dir, output_dir_name)
+    print(f'Generate {output_dir_name}, experiment: {exp_name}')
+
+    from sampling.all import sample_all
+    from utils.setup import prepare_accelerator, prepare_pipeline
+
     accelerator = prepare_accelerator(config, save_dir)
     pipeline = prepare_pipeline(config, accelerator, finetuning=False)
 
@@ -122,12 +205,31 @@ def generate_images(config_path: str, dataset_type: str):
 def main():
     available_datasets = ', '.join(sorted(get_available_datasets().values()))
     parser = argparse.ArgumentParser(description="Generate images for prompts from config/prompt")
-    parser.add_argument("--config_path", type=str, required=True)
-    parser.add_argument("--dataset_type", "--dataset", dest="dataset_type", type=str, required=True,
+    parser.add_argument("--config_path", type=str, required=True,
+                        help="Path to experiment config.json or to an experiment directory containing config.json")
+    parser.add_argument("--dataset_type", "--dataset", "--prompt_set", dest="dataset_type", type=str, required=True,
                         help=f"Dataset name from config/prompt. Available datasets: {available_datasets}",
                         )
+    parser.add_argument("--finetuned_model", "--finetuned", dest="finetuned_model", type=str, default=None,
+                        help=f"Path to the finetuned model checkpoint",
+                        )
+    parser.add_argument("--save_attn_grids", "--save_cross_attention_grids", type=int, default=0)
+    parser.add_argument("--attn_grid_every", "--cross_attention_grid_every", type=int, default=None)
+    parser.add_argument("--attn_grid_cell_size", type=int, default=None)
+    parser.add_argument("--mask_thr", type=float, default=None)
+    parser.add_argument("--asyn_k", type=float, default=None,
+                        help="Override item_k for all objects during AsynDM inference (0=linear, 1=quadratic)")
     args = parser.parse_args()
-    generate_images(args.config_path, args.dataset_type)
+    generate_images(
+        args.config_path,
+        args.dataset_type,
+        finetuned_model=args.finetuned_model,
+        save_attn_grids=bool(args.save_attn_grids),
+        attn_grid_every=args.attn_grid_every,
+        attn_grid_cell_size=args.attn_grid_cell_size,
+        mask_thr=args.mask_thr,
+        asyn_k=args.asyn_k,
+    )
 
 
 if __name__ == "__main__":

@@ -342,16 +342,35 @@ def unet_asyn_forward(
 
     cross_mask = None
     item_idx = extra_input['item_idx'] if (extra_input is not None and 'item_idx' in extra_input) else []
-    item_idx = [item + 1 for item in item_idx]
+    if len(item_idx) and isinstance(item_idx[0], (list, tuple)):
+        item_idx_groups = [[int(item) + 1 for item in group] for group in item_idx]
+    else:
+        item_idx_groups = [[int(item) + 1] for item in item_idx]
     used_layer_size = extra_input['used_layer_size'] if (
             extra_input is not None and 'used_layer_size' in extra_input) else 0
-    if len(item_idx):
+    if len(item_idx_groups):
         cross_mask = []
         for a in attn_probs_cross:
             if a is not None and a.shape[-2] == used_layer_size * used_layer_size:
                 _, b = a.chunk(2)
-                b = b[:, :, :, item_idx].mean(dim=1)
+                item_masks = []
+                for group in item_idx_groups:
+                    valid_group = [item for item in group if 0 <= item < b.shape[-1]]
+                    if valid_group:
+                        item_masks.append(b[:, :, :, valid_group].mean(dim=-1))
+                    else:
+                        item_masks.append(
+                            torch.zeros(b.shape[0], b.shape[1], b.shape[2], dtype=b.dtype, device=b.device)
+                        )
+                b = torch.stack(item_masks, dim=-1).mean(dim=1)
                 cross_mask.append(b)
+        if not cross_mask:
+            available_sizes = sorted({int(a.shape[-2]) for a in attn_probs_cross if a is not None})
+            raise RuntimeError(
+                f"No cross-attention maps found for used_layer_size={used_layer_size} "
+                f"(target HW={used_layer_size * used_layer_size}). "
+                f"Available attention HW sizes: {available_sizes}"
+            )
         cross_mask = torch.stack(cross_mask, dim=0).mean(dim=0)
     elif extra_input is not None and 'return_origin_cross' in extra_input and extra_input['return_origin_cross']:
         cross_mask = []

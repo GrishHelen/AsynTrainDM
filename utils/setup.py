@@ -1,4 +1,5 @@
 import datasets
+import numpy as np
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
@@ -7,10 +8,21 @@ from diffusers import DDIMScheduler, DDPMScheduler
 from diffusers import StableDiffusionPipeline
 from diffusers.training_utils import cast_training_params
 from peft import LoraConfig
+from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
 from utils.sampling import encode_prompts_list
+
+
+def mask_to_tensor(mask):
+    if isinstance(mask, Image.Image):
+        mask = torch.from_numpy(np.array(mask.convert("L"), dtype=np.float32))
+    else:
+        mask = torch.as_tensor(mask, dtype=torch.float32)
+    if mask.max().item() > 1:
+        mask = mask / 255.0
+    return mask
 
 
 class DiffusionDBDataset(Dataset):
@@ -26,18 +38,19 @@ class DiffusionDBDataset(Dataset):
     def __getitem__(self, idx):
         item = self.dataset[idx]
         image = item['image']
-        prompt = item['prompt']
+        prompt_text = item['prompt']
         mask = item.get('mask', None)
         image = self.image_transform(image)
-        prompt = self.text_transform(prompt)
+        prompt = self.text_transform(prompt_text)
         result = {
             'image': image,
-            'prompt_embeds': prompt
+            'prompt_embeds': prompt,
+            'prompt': prompt_text,
         }
         if self.load_masks:
             if mask is None:
                 raise ValueError(f"Mask for item {idx} doesn't exist")
-            result['mask'] = F.interpolate(torch.tensor(mask, dtype=torch.float32).unsqueeze(0).unsqueeze(0),
+            result['mask'] = F.interpolate(mask_to_tensor(mask).unsqueeze(0).unsqueeze(0),
                                            (64, 64)).squeeze()
         return result
 

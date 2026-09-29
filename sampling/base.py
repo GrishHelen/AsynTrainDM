@@ -9,7 +9,13 @@ from PIL import Image
 
 from diffusion.asyn_ddim_with_logprob import ddim_step_with_logprob, asyn_ddim_step_with_logprob, latents_decode
 from model.unet_2d_condition import unet_asyn_forward
-from .utils import get_item_idx_list, get_item_k_list, func_prev_binary
+from .utils import (
+    get_item_idx_list,
+    get_item_k_list,
+    get_prompt_from_config,
+    item_word_indices_to_token_groups,
+    func_prev_binary,
+)
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -20,8 +26,10 @@ def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_
     prompt_idx = idx // config.sample.num_batches_per_epoch
     if img_save_dir is None:
         img_save_dir = os.path.join(accelerator.project_configuration.project_dir, "images/")
+    prompt_text = get_prompt_from_config(config, prompt_idx)
     item_idx_list = get_item_idx_list(config, prompt_idx)
     item_k_list = get_item_k_list(config, prompt_idx)
+    item_token_groups = item_word_indices_to_token_groups(pipeline.tokenizer, prompt_text, item_idx_list)
 
     gs = [torch.Generator(device='cuda' if torch.cuda.is_available() else 'cpu') for _ in range(config.sample.batch_size)]
     for i, g in enumerate(gs):
@@ -68,7 +76,7 @@ def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_
                                                           return_dict=False,
                                                           extra_input={
                                                               'used_layer_size': 16,
-                                                              'item_idx': item_idx_list
+                                                              'item_idx': item_token_groups
                                                           },
                                                           return_extra_inf=True,
                                                           )

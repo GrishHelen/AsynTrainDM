@@ -8,7 +8,7 @@ import tqdm
 
 from diffusion.asyn_ddim_with_logprob import latents_encode
 from finetuning.eval import val_epoch
-from finetuning.utils import generate_timesteps_tensor, add_noise, predict_noise
+from finetuning.utils import add_noise, generate_ltg_timesteps_tensor, generate_timesteps_tensor, predict_noise
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -29,8 +29,11 @@ def train_epoch_asyn(config, accelerator, pipeline, dataloader, optimizer):
 
                     prompt_embeds = batch["prompt_embeds"].to(accelerator.device)
 
-                    ts_tensor = generate_timesteps_tensor(pipeline, batch_size=latents.shape[0],
-                                                          type=config.finetune.ts_type)
+                    if config.finetune.get("use_ltg", False):
+                        ts_tensor = generate_ltg_timesteps_tensor(config, pipeline, batch_size=latents.shape[0])
+                    else:
+                        ts_tensor = generate_timesteps_tensor(pipeline, batch_size=latents.shape[0],
+                                                              type=config.finetune.ts_type)
                     noise = torch.randn_like(latents, device=accelerator.device)
 
                     # get noisy_latents from clear latents

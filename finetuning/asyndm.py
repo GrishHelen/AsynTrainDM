@@ -1,4 +1,5 @@
 import gc
+import json
 import os
 import os.path
 from functools import partial
@@ -11,8 +12,9 @@ import tqdm
 
 from diffusion.asyn_ddim_with_logprob import latents_encode
 from finetuning.eval import val_epoch
-from finetuning.utils import add_noise, predict_noise
-from sampling.utils import func_prev_linear, func_prev_binary
+from finetuning.utils import add_noise, generate_ltg_timesteps_tensor, predict_noise
+from model.unet_2d_condition import unet_asyn_forward
+from sampling.utils import func_prev_linear, func_prev_binary, item_word_indices_to_token_groups
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
@@ -64,11 +66,161 @@ def compute_state_t(config, accelerator, pipeline, cross_mask, step, epoch):
     return state_t
 
 
+def get_attention_item_file(config):
+    return config.finetune.get("item_idx_file", "") or config.item_idx_file
+
+
+def load_attention_item_maps(config):
+    item_idx_file = get_attention_item_file(config)
+    if not item_idx_file:
+        raise ValueError(
+            "finetune_mask_source='attention' requires --finetune_items_file "
+            "or --items_file with prompt-to-object token markup"
+        )
+    with open(item_idx_file, "r", encoding="utf-8") as f:
+        item_config = json.load(f)
+    if "item_idx" not in item_config:
+        raise ValueError(f"{item_idx_file} must contain an 'item_idx' field")
+    return item_config["item_idx"], item_config.get("item_k", {})
+
+
+def get_prompt_item_info(config, prompt, item_idx_by_prompt, item_k_by_prompt):
+    if prompt not in item_idx_by_prompt:
+        raise KeyError(
+            f"Prompt is missing from {get_attention_item_file(config)}: {prompt[:120]!r}"
+        )
+
+    item_idx_list = [int(item) for item in item_idx_by_prompt[prompt]]
+    item_k_list = item_k_by_prompt.get(prompt)
+    if item_k_list is None:
+        item_k_list = [config.finetune.item_k] * len(item_idx_list)
+    item_k_list = [float(item_k) for item_k in item_k_list]
+
+    if len(item_idx_list) != len(item_k_list):
+        raise ValueError(
+            f"Different item_idx/item_k lengths for prompt {prompt[:120]!r}: "
+            f"{len(item_idx_list)} vs {len(item_k_list)}"
+        )
+    return item_idx_list, item_k_list
+
+
+def cross_attention_to_object_mask(config, cross_mask, item_k_list, target_size=64):
+    if cross_mask is None:
+        raise RuntimeError("UNet did not return cross-attention mask")
+    if cross_mask.ndim != 3:
+        raise ValueError(f"Expected cross_mask shape (B, HW, items), got {tuple(cross_mask.shape)}")
+
+    cross_mask = cross_mask.float()
+    bsize, width_height, item_cnt = cross_mask.shape
+    if item_cnt == 0:
+        return torch.zeros(bsize, target_size, target_size, device=cross_mask.device)
+
+    width = int(width_height ** 0.5)
+    if width * width != width_height:
+        raise ValueError(f"Cross-attention map size must be square, got HW={width_height}")
+
+    mask_mean = config.mask_thr * cross_mask.mean(dim=1, keepdim=True)
+    cross_mask = (cross_mask >= mask_mean).float()
+    cross_mask = cross_mask.permute(0, 2, 1).reshape(bsize, item_cnt, width, width)
+
+    priority = torch.tensor(item_k_list, dtype=torch.float32, device=cross_mask.device).view(1, item_cnt, 1, 1)
+    priority_masks = cross_mask * priority
+    _, max_idx = priority_masks.max(dim=1)
+
+    final_masks = torch.zeros_like(cross_mask)
+    for item_idx in range(item_cnt):
+        final_masks[:, item_idx] = (max_idx == item_idx).float() * cross_mask[:, item_idx]
+
+    object_mask = (final_masks > 0.5).any(dim=1).float()
+    if object_mask.shape[-2:] != (target_size, target_size):
+        object_mask = F.interpolate(
+            object_mask.unsqueeze(1),
+            (target_size, target_size),
+            mode="nearest",
+        ).squeeze(1)
+    return object_mask
+
+
+def build_attention_object_masks(
+        config,
+        accelerator,
+        pipeline,
+        latents,
+        noise,
+        prompt_embeds,
+        prompts,
+        step,
+        item_idx_by_prompt,
+        item_k_by_prompt,
+):
+    masks = []
+    num_train_timesteps = pipeline.scheduler.config.num_train_timesteps
+    probe_t_value = max(num_train_timesteps - int(step) - 1, 0)
+
+    for batch_idx, prompt in enumerate(prompts):
+        item_idx_list, item_k_list = get_prompt_item_info(
+            config, prompt, item_idx_by_prompt, item_k_by_prompt
+        )
+        item_token_groups = item_word_indices_to_token_groups(pipeline.tokenizer, prompt, item_idx_list)
+        if len(item_idx_list) == 0:
+            masks.append(torch.zeros(64, 64, device=accelerator.device))
+            continue
+
+        probe_t = torch.full(
+            (1, 64, 64),
+            probe_t_value,
+            device=accelerator.device,
+            dtype=torch.long,
+        )
+        noisy_latent = add_noise(
+            pipeline.scheduler,
+            latents[batch_idx:batch_idx + 1],
+            noise[batch_idx:batch_idx + 1],
+            probe_t,
+        )
+
+        # unet_asyn_forward extracts the second half of a CFG-shaped batch.
+        latent_input = torch.cat([noisy_latent, noisy_latent], dim=0)
+        latent_input = pipeline.scheduler.scale_model_input(latent_input)
+        concat_t = torch.cat([probe_t.reshape(1, -1), probe_t.reshape(1, -1)], dim=0)
+        prompt_input = torch.cat(
+            [prompt_embeds[batch_idx:batch_idx + 1], prompt_embeds[batch_idx:batch_idx + 1]],
+            dim=0,
+        )
+
+        _, extra_inf = unet_asyn_forward(
+            pipeline.unet,
+            latent_input,
+            concat_t,
+            encoder_hidden_states=prompt_input,
+            return_dict=False,
+            extra_input={
+                "used_layer_size": config.finetune.attn_mask_used_layer_size,
+                "item_idx": item_token_groups,
+            },
+            return_extra_inf=True,
+        )
+        object_mask = cross_attention_to_object_mask(
+            config,
+            extra_inf["cross_mask"],
+            item_k_list,
+            target_size=64,
+        )
+        masks.append(object_mask.squeeze(0))
+
+    return torch.stack(masks, dim=0)
+
+
 def train_epoch_asyndm(config, accelerator, pipeline, dataloader, optimizer, epoch):
     autocast = accelerator.autocast
     params_to_optimize = list(filter(lambda p: p.requires_grad, pipeline.unet.parameters()))
     pipeline.unet.train()
     state_stat = [1e7,-1e7,0, 0] # min, max, sum, cnt  
+    mask_source = config.finetune.get("mask_source", "dataset")
+    if mask_source == "attention" and not config.finetune.get("use_ltg", False):
+        item_idx_by_prompt, item_k_by_prompt = load_attention_item_maps(config)
+    else:
+        item_idx_by_prompt, item_k_by_prompt = None, None
 
     for i, batch in enumerate(dataloader):
         if i == config.finetune.max_batches:
@@ -80,15 +232,46 @@ def train_epoch_asyndm(config, accelerator, pipeline, dataloader, optimizer, epo
                     latents = latents_encode(pipeline, batch["image"].to(accelerator.device))
 
                     prompt_embeds = batch["prompt_embeds"].to(accelerator.device)
+                    noise = torch.randn_like(latents, device=accelerator.device)
 
-                    cross_mask = torch.tensor(batch['mask'], dtype=torch.float32)
-                    step = np.random.randint(0, pipeline.scheduler.config.num_train_timesteps)
-                    state_t = compute_state_t(config, accelerator, pipeline, cross_mask, step, epoch)
+                    if config.finetune.get("use_ltg", False):
+                        state_t = generate_ltg_timesteps_tensor(config, pipeline, batch_size=latents.shape[0])
+                    else:
+                        step = np.random.randint(0, pipeline.scheduler.config.num_train_timesteps)
+                        if mask_source == "attention":
+                            if "prompt" not in batch:
+                                raise ValueError("Attention masks require raw prompts in the dataloader batch")
+                            prompts = batch["prompt"]
+                            if isinstance(prompts, str):
+                                prompts = [prompts]
+                            cross_mask = build_attention_object_masks(
+                                config,
+                                accelerator,
+                                pipeline,
+                                latents,
+                                noise,
+                                prompt_embeds,
+                                prompts,
+                                step,
+                                item_idx_by_prompt,
+                                item_k_by_prompt,
+                            )
+                        else:
+                            if "mask" not in batch:
+                                raise ValueError(
+                                    "finetune_mask_source='dataset' requires --finetune_use_mask 1 "
+                                    "and a dataset with a 'mask' column"
+                                )
+                            cross_mask = torch.as_tensor(
+                                batch['mask'],
+                                dtype=torch.float32,
+                                device=accelerator.device,
+                            )
+                        state_t = compute_state_t(config, accelerator, pipeline, cross_mask, step, epoch)
                     state_stat = [min(state_stat[0], torch.min(state_t)), 
                                   max(state_stat[1], torch.max(state_t)),
                                   state_stat[2] + torch.sum(state_t),
-                                  state_stat[3] + state_t.shape[0]]
-                    noise = torch.randn_like(latents, device=accelerator.device)
+                                  state_stat[3] + state_t.numel()]
 
                     # get noisy_latents from clear latents
                     noisy_latents = add_noise(pipeline.scheduler, latents, noise, state_t)

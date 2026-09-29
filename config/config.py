@@ -101,6 +101,11 @@ def get_default_config():
     # whether to use classifier-free guidance
     sample.cfg = True
     sample.finetuned_model = None
+    sample.item_k = None
+    sample.save_attn_grids = False
+    sample.attn_grid_every = 5
+    sample.attn_grid_cell_size = 192
+    sample.attn_grid_dir = "attn_grids"
 
     ###### Fine-tuning ######
     config.finetune = finetune = ml_collections.ConfigDict()
@@ -117,8 +122,18 @@ def get_default_config():
     finetune.lr = 5e-4
     finetune.ts_type = FinetuneTsType.RANDOM
     finetune.use_masks = False
+    finetune.use_ltg = False
+    finetune.mask_source = "dataset"  # dataset / attention
+    finetune.item_idx_file = ""
+    finetune.attn_mask_used_layer_size = 16
     finetune.type = FinetuneType.Asyn
     finetune.item_k = 0.7
+
+    finetune.ltg = ml_collections.ConfigDict()
+    finetune.ltg.loc = 0.5
+    finetune.ltg.scale = 1.0
+    finetune.ltg.std = 0.6
+    finetune.ltg.block_size = 1
 
     finetune.schedule_warmup = ml_collections.ConfigDict()
     finetune.schedule_warmup.n_epochs = 0
@@ -150,6 +165,7 @@ def get_config():
     parser.add_argument("--generate_dm", "--dm", type=int, default=1)
     parser.add_argument("--prompt_file", type=str, default="")
     parser.add_argument("--items_file", type=str, default="")
+    parser.add_argument("--mask_thr", type=float, default=None)
 
     # config.pretrained args
     parser.add_argument("--pretrained_model", "--pretrained", type=str,
@@ -158,6 +174,10 @@ def get_config():
     # config.sample args
     parser.add_argument("--sample_batch_size", "--sample_bs", type=int, default=4)
     parser.add_argument("--finetuned_model", "--finetuned", type=str, default=None)
+    parser.add_argument("--sample_k", type=float, default=None)
+    parser.add_argument("--save_attn_grids", "--save_cross_attention_grids", type=int, default=0)
+    parser.add_argument("--attn_grid_every", "--cross_attention_grid_every", type=int, default=5)
+    parser.add_argument("--attn_grid_cell_size", type=int, default=192)
 
     # config.finetune args
     parser.add_argument("--finetune_dataset_dir", "--dataset_dir", "--dataset", type=str,
@@ -172,6 +192,14 @@ def get_config():
     parser.add_argument("--finetune_lr", type=float, default=None)
     parser.add_argument("--finetune_ts_type", type=str, default=None)
     parser.add_argument("--finetune_use_mask", type=int, default=0)
+    parser.add_argument("--finetune_use_ltg", "--use_ltg", type=int, default=0)
+    parser.add_argument("--finetune_mask_source", type=str, default="dataset")
+    parser.add_argument("--finetune_items_file", "--finetune_item_idx_file", type=str, default="")
+    parser.add_argument("--finetune_attn_mask_used_layer_size", "--attn_mask_used_layer_size", type=int, default=16)
+    parser.add_argument("--finetune_ltg_loc", "--ltg_loc", type=float, default=0.5)
+    parser.add_argument("--finetune_ltg_scale", "--ltg_scale", type=float, default=1.0)
+    parser.add_argument("--finetune_ltg_std", "--ltg_std", type=float, default=0.6)
+    parser.add_argument("--finetune_ltg_block_size", "--ltg_block_size", type=int, default=1)
     parser.add_argument("--finetune_type", type=str, default='asyn')
     parser.add_argument("--finetune_item_k", type=float, default=0.7)
     
@@ -205,8 +233,16 @@ def get_config():
     # config.sample args
     config.sample.finetuned_model = args.finetuned_model
     config.sample.batch_size = args.sample_batch_size
+    if args.sample_k is not None and not 0.0 <= args.sample_k <= 1.0:
+        raise ValueError(f"sample_k must be in [0, 1], got {args.sample_k}")
+    config.sample.item_k = args.sample_k
+    config.sample.save_attn_grids = bool(args.save_attn_grids)
+    config.sample.attn_grid_every = args.attn_grid_every
+    config.sample.attn_grid_cell_size = args.attn_grid_cell_size
     config.prompt_file = args.prompt_file
     config.item_idx_file = args.items_file
+    if args.mask_thr is not None:
+        config.mask_thr = args.mask_thr
 
     # config.finetune args
     config.finetune.dataset_dir = args.finetune_dataset_dir
@@ -232,6 +268,16 @@ def get_config():
     else:
         raise ValueError('')
     config.finetune.use_masks = bool(args.finetune_use_mask)
+    config.finetune.use_ltg = bool(args.finetune_use_ltg)
+    config.finetune.mask_source = args.finetune_mask_source.lower()
+    if config.finetune.mask_source not in ["dataset", "attention"]:
+        raise ValueError(f"Unknown finetune_mask_source: {args.finetune_mask_source}")
+    config.finetune.item_idx_file = args.finetune_items_file
+    config.finetune.attn_mask_used_layer_size = args.finetune_attn_mask_used_layer_size
+    config.finetune.ltg.loc = args.finetune_ltg_loc
+    config.finetune.ltg.scale = args.finetune_ltg_scale
+    config.finetune.ltg.std = args.finetune_ltg_std
+    config.finetune.ltg.block_size = args.finetune_ltg_block_size
     if args.finetune_type == 'asyn':
         config.finetune.type = FinetuneType.Asyn
     elif args.finetune_type == 'asyndm':
