@@ -11,12 +11,17 @@ import torch.nn.functional as F
 import tqdm
 
 from diffusion.asyn_ddim_with_logprob import latents_encode
+from finetuning.attention_masks import cross_attention_maps_to_object_mask
 from finetuning.eval import val_epoch
+from finetuning.metrics import evaluate_epoch_metrics
 from finetuning.utils import add_noise, generate_ltg_timesteps_tensor, predict_noise
 from model.unet_2d_condition import unet_asyn_forward
 from sampling.utils import func_prev_linear, func_prev_binary, item_word_indices_to_token_groups
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
+
+ATTENTION_MASK_LAYER_SIZES = (16, 32)
+
 
 class FinetuneWarmupType(Enum):
     POLYNOM = 'polynom'
@@ -105,40 +110,14 @@ def get_prompt_item_info(config, prompt, item_idx_by_prompt, item_k_by_prompt):
 
 
 def cross_attention_to_object_mask(config, cross_mask, item_k_list, target_size=64):
-    if cross_mask is None:
-        raise RuntimeError("UNet did not return cross-attention mask")
-    if cross_mask.ndim != 3:
-        raise ValueError(f"Expected cross_mask shape (B, HW, items), got {tuple(cross_mask.shape)}")
-
-    cross_mask = cross_mask.float()
-    bsize, width_height, item_cnt = cross_mask.shape
-    if item_cnt == 0:
-        return torch.zeros(bsize, target_size, target_size, device=cross_mask.device)
-
-    width = int(width_height ** 0.5)
-    if width * width != width_height:
-        raise ValueError(f"Cross-attention map size must be square, got HW={width_height}")
-
-    mask_mean = config.mask_thr * cross_mask.mean(dim=1, keepdim=True)
-    cross_mask = (cross_mask >= mask_mean).float()
-    cross_mask = cross_mask.permute(0, 2, 1).reshape(bsize, item_cnt, width, width)
-
-    priority = torch.tensor(item_k_list, dtype=torch.float32, device=cross_mask.device).view(1, item_cnt, 1, 1)
-    priority_masks = cross_mask * priority
-    _, max_idx = priority_masks.max(dim=1)
-
-    final_masks = torch.zeros_like(cross_mask)
-    for item_idx in range(item_cnt):
-        final_masks[:, item_idx] = (max_idx == item_idx).float() * cross_mask[:, item_idx]
-
-    object_mask = (final_masks > 0.5).any(dim=1).float()
-    if object_mask.shape[-2:] != (target_size, target_size):
-        object_mask = F.interpolate(
-            object_mask.unsqueeze(1),
-            (target_size, target_size),
-            mode="nearest",
-        ).squeeze(1)
-    return object_mask
+    del item_k_list  # Training uses the union of all object regions, independent of schedule priority.
+    threshold_type = config.finetune.get("attn_mask_threshold_type", "robust")
+    return cross_attention_maps_to_object_mask(
+        cross_mask,
+        target_size=target_size,
+        threshold_type=threshold_type,
+        threshold_scale=config.mask_thr,
+    )
 
 
 def build_attention_object_masks(
@@ -195,14 +174,14 @@ def build_attention_object_masks(
             encoder_hidden_states=prompt_input,
             return_dict=False,
             extra_input={
-                "used_layer_size": config.finetune.attn_mask_used_layer_size,
+                "used_layer_sizes": ATTENTION_MASK_LAYER_SIZES,
                 "item_idx": item_token_groups,
             },
             return_extra_inf=True,
         )
         object_mask = cross_attention_to_object_mask(
             config,
-            extra_inf["cross_mask"],
+            extra_inf["cross_masks"],
             item_k_list,
             target_size=64,
         )
@@ -313,6 +292,8 @@ def train_asyndm(config, accelerator, pipeline, optimizer, save_dir, train_datal
                     os.remove(best_model_path)
                 best_model_path = os.path.join(models_save_dir, f'model_{epoch + 1}.pth')
                 torch.save(pipeline.unet.state_dict(), best_model_path)
+
+        evaluate_epoch_metrics(config, accelerator, pipeline, save_dir, epoch)
 
         if train_loss is None:
             return

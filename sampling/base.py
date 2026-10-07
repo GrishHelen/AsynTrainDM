@@ -8,6 +8,7 @@ import tqdm
 from PIL import Image
 
 from diffusion.asyn_ddim_with_logprob import ddim_step_with_logprob, asyn_ddim_step_with_logprob, latents_decode
+from finetuning.attention_masks import binarize_attention_maps, fuse_cross_attention_maps
 from model.unet_2d_condition import unet_asyn_forward
 from .utils import (
     get_item_idx_list,
@@ -20,7 +21,7 @@ from .utils import (
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
 
-def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_save_dir=None):
+def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_save_dir=None, *, generators=None):
     global_idx = idx * config.sample.batch_size
     autocast = accelerator.autocast
     prompt_idx = idx // config.sample.num_batches_per_epoch
@@ -30,10 +31,14 @@ def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_
     item_idx_list = get_item_idx_list(config, prompt_idx)
     item_k_list = get_item_k_list(config, prompt_idx)
     item_token_groups = item_word_indices_to_token_groups(pipeline.tokenizer, prompt_text, item_idx_list)
+    threshold_type = config.sample.get("attn_mask_threshold_type", "mean").lower()
+    attention_layer_sizes = (16, 32) if threshold_type == "robust" else (16,)
 
-    gs = [torch.Generator(device='cuda' if torch.cuda.is_available() else 'cpu') for _ in range(config.sample.batch_size)]
-    for i, g in enumerate(gs):
-        g.manual_seed(config.seed + (idx % config.sample.num_batches_per_epoch) * config.sample.batch_size + i)
+    gs = generators
+    if gs is None:
+        gs = [torch.Generator(device='cuda' if torch.cuda.is_available() else 'cpu') for _ in range(config.sample.batch_size)]
+        for i, g in enumerate(gs):
+            g.manual_seed(config.seed + (idx % config.sample.num_batches_per_epoch) * config.sample.batch_size + i)
     noise_latents1 = pipeline.prepare_latents(
         config.sample.batch_size,
         pipeline.unet.config.in_channels,  ## channels
@@ -52,7 +57,7 @@ def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_
     extra_step_kwargs = pipeline.prepare_extra_step_kwargs(gs, config.sample.eta)
 
     latents_t = noise_latents1
-    cross_mask = []
+    cross_masks = {size: [] for size in attention_layer_sizes}
 
     for i, t in tqdm(
             enumerate(ts),
@@ -75,7 +80,7 @@ def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_
                                                           encoder_hidden_states=prompt_embeds1_combine,
                                                           return_dict=False,
                                                           extra_input={
-                                                              'used_layer_size': 16,
+                                                              'used_layer_sizes': attention_layer_sizes,
                                                               'item_idx': item_token_groups
                                                           },
                                                           return_extra_inf=True,
@@ -89,16 +94,35 @@ def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_
                                                                    **extra_step_kwargs)
                 latents_t = latents_t_1
 
-                cross_mask.append(extra_inf['cross_mask'])
+                for size in attention_layer_sizes:
+                    cross_masks[size].append(extra_inf['cross_masks'][size])
 
-    cross_mask = torch.stack(cross_mask, dim=0).mean(dim=0)
-    mask_mean = config.mask_thr * cross_mask.mean(dim=1, keepdim=True)
-    cross_mask[cross_mask >= mask_mean] = 1
-    cross_mask[cross_mask < mask_mean] = 0
+    cross_masks = {
+        size: torch.stack(maps, dim=0).mean(dim=0)
+        for size, maps in cross_masks.items()
+    }
+    if threshold_type == "robust":
+        attention_maps = fuse_cross_attention_maps(cross_masks, target_size=64)
+        cross_mask = binarize_attention_maps(
+            attention_maps,
+            threshold_type="robust",
+            threshold_scale=config.mask_thr,
+        )
+    elif threshold_type == "mean":
+        cross_mask = cross_masks[16]
+        mask_mean = config.mask_thr * cross_mask.mean(dim=1, keepdim=True)
+        cross_mask = (cross_mask >= mask_mean).float()
 
-    bsize, width_height, item_cnt = cross_mask.shape
-    width = int(width_height ** 0.5)
-    cross_mask = cross_mask.permute(0, 2, 1).reshape(bsize, item_cnt, width, width)
+        bsize, width_height, item_cnt = cross_mask.shape
+        width = int(width_height ** 0.5)
+        cross_mask = cross_mask.permute(0, 2, 1).reshape(bsize, item_cnt, width, width)
+    else:
+        raise ValueError(
+            f"Unknown inference attention mask threshold type: {threshold_type!r}. "
+            "Expected 'mean' or 'robust'."
+        )
+
+    item_cnt = cross_mask.shape[1]
     a_tensor = torch.tensor(item_k_list, dtype=torch.float32,
                             device=cross_mask.device)  # shape: (item_cnt,)
     a_tensor = a_tensor.view(1, item_cnt, 1, 1)  # shape: (1, item_cnt, 1, 1)
@@ -108,7 +132,8 @@ def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_
     for i in range(item_cnt):
         final_masks[:, i] = (max_idx == i).float() * cross_mask[:, i]
     cross_mask = final_masks
-    cross_mask = F.interpolate(cross_mask, (64, 64))  # mode: nearest
+    if cross_mask.shape[-2:] != (64, 64):
+        cross_mask = F.interpolate(cross_mask, (64, 64), mode="nearest")
 
     if config.generate_dm:
         images = latents_decode(pipeline, latents_t, accelerator.device, prompt_embeds1_combine.dtype).cpu().detach()
@@ -123,7 +148,7 @@ def generate_dm(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_
         return cross_mask
 
 
-def generate_dm_concave(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_save_dir=None):
+def generate_dm_concave(config, accelerator, pipeline, idx, prompt_embeds1_combine, img_save_dir=None, *, generators=None):
     global_idx = idx * config.sample.batch_size
     autocast = accelerator.autocast
     prompt_idx = idx // config.sample.num_batches_per_epoch
@@ -131,9 +156,11 @@ def generate_dm_concave(config, accelerator, pipeline, idx, prompt_embeds1_combi
         img_save_dir = os.path.join(accelerator.project_configuration.project_dir, "images/")
     item_k_list = get_item_k_list(config, prompt_idx)
 
-    gs = [torch.Generator(device='cuda' if torch.cuda.is_available() else 'cpu') for _ in range(config.sample.batch_size)]
-    for i, g in enumerate(gs):
-        g.manual_seed(config.seed + (idx % config.sample.num_batches_per_epoch) * config.sample.batch_size + i)
+    gs = generators
+    if gs is None:
+        gs = [torch.Generator(device='cuda' if torch.cuda.is_available() else 'cpu') for _ in range(config.sample.batch_size)]
+        for i, g in enumerate(gs):
+            g.manual_seed(config.seed + (idx % config.sample.num_batches_per_epoch) * config.sample.batch_size + i)
     noise_latents1 = pipeline.prepare_latents(
         config.sample.batch_size,
         pipeline.unet.config.in_channels,  ## channels

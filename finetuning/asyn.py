@@ -8,6 +8,7 @@ import tqdm
 
 from diffusion.asyn_ddim_with_logprob import latents_encode
 from finetuning.eval import val_epoch
+from finetuning.metrics import evaluate_epoch_metrics
 from finetuning.utils import add_noise, generate_ltg_timesteps_tensor, generate_timesteps_tensor, predict_noise
 
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
@@ -74,6 +75,7 @@ def train_asyn(config, accelerator, pipeline, optimizer, save_dir, train_dataloa
                     os.remove(best_model_path)
                 best_model_path = os.path.join(models_save_dir, f'model_{epoch + 1}.pth')
                 torch.save(pipeline.unet.state_dict(), best_model_path)
+        evaluate_epoch_metrics(config, accelerator, pipeline, save_dir, epoch)
         if train_loss is None:
             return
 

@@ -1,5 +1,6 @@
 import os
 import re
+from collections.abc import Mapping
 from functools import partial
 
 import numpy as np
@@ -9,6 +10,7 @@ import tqdm
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from diffusion.asyn_ddim_with_logprob import asyn_ddim_step_with_logprob, latents_decode
+from finetuning.attention_masks import binarize_attention_maps, fuse_cross_attention_maps
 from model.unet_2d_condition import unet_asyn_forward
 from .utils import (
     get_item_idx_list,
@@ -24,6 +26,7 @@ tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
 RESAMPLE_BILINEAR = Image.Resampling.BILINEAR if hasattr(Image, "Resampling") else Image.BILINEAR
 RESAMPLE_NEAREST = Image.Resampling.NEAREST if hasattr(Image, "Resampling") else Image.NEAREST
+ROBUST_ATTENTION_LAYER_SIZES = (16, 32)
 
 
 def tensor_image_to_pil(image_tensor):
@@ -60,22 +63,51 @@ def attention_save_steps(config):
     return steps
 
 
-def cross_attention_maps(config, cross_mask, item_k_list, target_size=64):
-    if cross_mask is None:
+def cross_attention_maps(config, cross_masks, item_k_list, target_size=64):
+    if cross_masks is None:
         return None, None
 
-    cross_mask = cross_mask.detach().float()
-    bsize, width_height, item_cnt = cross_mask.shape
-    width = int(width_height ** 0.5)
-    if width * width != width_height:
-        raise ValueError(f"Cross-attention map size must be square, got HW={width_height}")
+    threshold_type = config.sample.get("attn_mask_threshold_type", "mean").lower()
+    if threshold_type == "robust":
+        raw_maps = fuse_cross_attention_maps(cross_masks, target_size=target_size)
+        binary_maps = binarize_attention_maps(
+            raw_maps,
+            threshold_type="robust",
+            threshold_scale=config.mask_thr,
+        )
+    elif threshold_type == "mean":
+        if isinstance(cross_masks, Mapping):
+            cross_mask = cross_masks.get(16)
+            if cross_mask is None:
+                cross_mask = next(iter(cross_masks.values()), None)
+        else:
+            cross_mask = cross_masks
+        if cross_mask is None:
+            return None, None
 
-    raw_maps = cross_mask.permute(0, 2, 1).reshape(bsize, item_cnt, width, width)
-    mask_mean = config.mask_thr * cross_mask.mean(dim=1, keepdim=True)
-    binary_maps = (cross_mask >= mask_mean).float()
-    binary_maps = binary_maps.permute(0, 2, 1).reshape(bsize, item_cnt, width, width)
+        cross_mask = cross_mask.detach().float()
+        bsize, width_height, item_cnt = cross_mask.shape
+        width = int(width_height ** 0.5)
+        if width * width != width_height:
+            raise ValueError(f"Cross-attention map size must be square, got HW={width_height}")
 
-    priority = torch.tensor(item_k_list, dtype=torch.float32, device=cross_mask.device).view(1, item_cnt, 1, 1)
+        raw_maps = cross_mask.permute(0, 2, 1).reshape(bsize, item_cnt, width, width)
+        mask_mean = config.mask_thr * cross_mask.mean(dim=1, keepdim=True)
+        binary_maps = (cross_mask >= mask_mean).float()
+        binary_maps = binary_maps.permute(0, 2, 1).reshape(bsize, item_cnt, width, width)
+        if raw_maps.shape[-2:] != (target_size, target_size):
+            raw_maps = F.interpolate(raw_maps, (target_size, target_size), mode="bilinear", align_corners=False)
+        if binary_maps.shape[-2:] != (target_size, target_size):
+            binary_maps = F.interpolate(binary_maps, (target_size, target_size), mode="nearest")
+    else:
+        raise ValueError(
+            f"Unknown inference attention mask threshold type: {threshold_type!r}. "
+            "Expected 'mean' or 'robust'."
+        )
+
+    item_cnt = binary_maps.shape[1]
+
+    priority = torch.tensor(item_k_list, dtype=torch.float32, device=binary_maps.device).view(1, item_cnt, 1, 1)
     priority_masks = binary_maps * priority
     _, max_idx = priority_masks.max(dim=1)
 
@@ -83,10 +115,6 @@ def cross_attention_maps(config, cross_mask, item_k_list, target_size=64):
     for item_idx in range(item_cnt):
         final_masks[:, item_idx] = (max_idx == item_idx).float() * binary_maps[:, item_idx]
 
-    if raw_maps.shape[-2:] != (target_size, target_size):
-        raw_maps = F.interpolate(raw_maps, (target_size, target_size), mode="bilinear", align_corners=False)
-    if final_masks.shape[-2:] != (target_size, target_size):
-        final_masks = F.interpolate(final_masks, (target_size, target_size), mode="nearest")
     return raw_maps, final_masks
 
 
@@ -199,7 +227,7 @@ def save_attention_grid(config, img_save_dir, global_idx, prompt, item_labels, r
 
 
 def generate_asyn(config, accelerator, pipeline, idx, prompt_embeds1_combine, cross_mask=None, img_save_dir=None,
-                  prompt=None):
+                  prompt=None, *, generators=None):
     global_idx = idx * config.sample.batch_size
     autocast = accelerator.autocast
     prompt_idx = idx // config.sample.num_batches_per_epoch
@@ -209,14 +237,18 @@ def generate_asyn(config, accelerator, pipeline, idx, prompt_embeds1_combine, cr
     item_idx_list = get_item_idx_list(config, prompt_idx)
     item_k_list = get_item_k_list(config, prompt_idx)
     item_token_groups = item_word_indices_to_token_groups(pipeline.tokenizer, prompt_text, item_idx_list)
+    threshold_type = config.sample.get("attn_mask_threshold_type", "mean").lower()
+    attention_layer_sizes = ROBUST_ATTENTION_LAYER_SIZES if threshold_type == "robust" else (16,)
     save_attn_grids = bool(config.sample.get("save_attn_grids", False))
     attn_steps = attention_save_steps(config) if save_attn_grids else set()
     item_labels = item_word_labels(prompt_text, item_idx_list, item_token_groups) if save_attn_grids else []
     attn_records = [[] for _ in range(config.sample.batch_size)] if save_attn_grids else None
 
-    gs = [torch.Generator(device='cuda' if torch.cuda.is_available() else 'cpu') for _ in range(config.sample.batch_size)]
-    for i, g in enumerate(gs):
-        g.manual_seed(config.seed + (idx % config.sample.num_batches_per_epoch) * config.sample.batch_size + i)
+    gs = generators
+    if gs is None:
+        gs = [torch.Generator(device='cuda' if torch.cuda.is_available() else 'cpu') for _ in range(config.sample.batch_size)]
+        for i, g in enumerate(gs):
+            g.manual_seed(config.seed + (idx % config.sample.num_batches_per_epoch) * config.sample.batch_size + i)
     noise_latents1 = pipeline.prepare_latents(
         config.sample.batch_size,
         pipeline.unet.config.in_channels,  ## channels
@@ -289,13 +321,13 @@ def generate_asyn(config, accelerator, pipeline, idx, prompt_embeds1_combine, cr
                                                           encoder_hidden_states=prompt_embeds1_combine,
                                                           return_dict=False,
                                                           extra_input={
-                                                              'used_layer_size': 16,
+                                                              'used_layer_sizes': attention_layer_sizes,
                                                               'item_idx': item_token_groups
                                                           },
                                                           return_extra_inf=True,
                                                           )
                 noise_pred = noise_pred[0]
-                raw_maps, final_masks = cross_attention_maps(config, extra_inf['cross_mask'], item_k_list)
+                raw_maps, final_masks = cross_attention_maps(config, extra_inf['cross_masks'], item_k_list)
                 if config.sample.cfg:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + config.sample.guidance_scale * (

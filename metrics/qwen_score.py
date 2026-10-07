@@ -132,11 +132,13 @@ class QwenScoreEvaluator:
 
         return self._parse_score(response, img_description)
 
-    def evaluate(
+    def evaluate_scores(
             self,
             images: List[Image.Image],
             img_descriptions: List[str],
-    ) -> float:
+    ) -> List[float]:
+        if not images or len(images) != len(img_descriptions):
+            raise ValueError("Expected a nonempty image list with one description per image")
         scores = []
         total = len(images)
 
@@ -144,7 +146,10 @@ class QwenScoreEvaluator:
             score = self.evaluate_sample(images[i], img_descriptions[i])
             scores.append(score)
 
-        return float(np.mean(scores))
+        return scores
+
+    def evaluate(self, images: List[Image.Image], img_descriptions: List[str]) -> float:
+        return float(np.mean(self.evaluate_scores(images, img_descriptions)))
 
 
 def compute_qwen_score(

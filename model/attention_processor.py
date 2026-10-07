@@ -182,9 +182,17 @@ def processor2_0_asyn_forward(
     if not is_cross:
         return hidden_states
     else:
-        used_layer_size = extra_input['used_layer_size'] if (
-                extra_input is not None and 'used_layer_size' in extra_input) else 0
-        if attn_probs.shape[-2] == used_layer_size * used_layer_size:
+        if extra_input is None:
+            used_layer_sizes = []
+        elif 'used_layer_sizes' in extra_input:
+            used_layer_sizes = [int(size) for size in extra_input['used_layer_sizes']]
+        elif 'used_layer_size' in extra_input:
+            used_layer_sizes = [int(extra_input['used_layer_size'])]
+        else:
+            used_layer_sizes = []
+
+        used_attention_sizes = {size * size for size in used_layer_sizes}
+        if attn_probs.shape[-2] in used_attention_sizes:
             # b,h,h_w,seq_l = attn_probs.shape
             return hidden_states, attn_probs  # .reshape(b*h, h_w, seq_l)
         else:

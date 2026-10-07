@@ -117,11 +117,11 @@ class CLIPScoreEvaluator:
     def evaluate_sample(self, image: Image.Image, img_description: str) -> float:
         return self.evaluate_batch([image], [img_description])[0]
 
-    def evaluate(
+    def evaluate_scores(
             self,
             images: List[Image.Image],
             img_descriptions: List[str],
-    ) -> float:
+    ) -> List[float]:
         if len(images) != len(img_descriptions):
             raise ValueError(
                 "The number of images must match the number of descriptions: "
@@ -138,7 +138,10 @@ class CLIPScoreEvaluator:
             batch_descriptions = img_descriptions[i:i + self.batch_size]
             scores.extend(self.evaluate_batch(batch_images, batch_descriptions))
 
-        return float(np.mean(scores))
+        return scores
+
+    def evaluate(self, images: List[Image.Image], img_descriptions: List[str]) -> float:
+        return float(np.mean(self.evaluate_scores(images, img_descriptions)))
 
 
 def compute_clip_score(

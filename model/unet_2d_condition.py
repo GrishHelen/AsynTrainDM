@@ -341,39 +341,52 @@ def unet_asyn_forward(
         unscale_lora_layers(self, lora_scale)
 
     cross_mask = None
+    cross_masks = {}
     item_idx = extra_input['item_idx'] if (extra_input is not None and 'item_idx' in extra_input) else []
     if len(item_idx) and isinstance(item_idx[0], (list, tuple)):
         item_idx_groups = [[int(item) + 1 for item in group] for group in item_idx]
     else:
         item_idx_groups = [[int(item) + 1] for item in item_idx]
-    used_layer_size = extra_input['used_layer_size'] if (
-            extra_input is not None and 'used_layer_size' in extra_input) else 0
+    if extra_input is None:
+        used_layer_sizes = []
+    elif 'used_layer_sizes' in extra_input:
+        used_layer_sizes = [int(size) for size in extra_input['used_layer_sizes']]
+    elif 'used_layer_size' in extra_input:
+        used_layer_sizes = [int(extra_input['used_layer_size'])]
+    else:
+        used_layer_sizes = []
     if len(item_idx_groups):
-        cross_mask = []
-        for a in attn_probs_cross:
-            if a is not None and a.shape[-2] == used_layer_size * used_layer_size:
-                _, b = a.chunk(2)
-                item_masks = []
-                for group in item_idx_groups:
-                    valid_group = [item for item in group if 0 <= item < b.shape[-1]]
-                    if valid_group:
-                        item_masks.append(b[:, :, :, valid_group].mean(dim=-1))
-                    else:
-                        item_masks.append(
-                            torch.zeros(b.shape[0], b.shape[1], b.shape[2], dtype=b.dtype, device=b.device)
-                        )
-                b = torch.stack(item_masks, dim=-1).mean(dim=1)
-                cross_mask.append(b)
-        if not cross_mask:
-            available_sizes = sorted({int(a.shape[-2]) for a in attn_probs_cross if a is not None})
+        for used_layer_size in used_layer_sizes:
+            masks_at_size = []
+            for a in attn_probs_cross:
+                if a is not None and a.shape[-2] == used_layer_size * used_layer_size:
+                    _, b = a.chunk(2)
+                    item_masks = []
+                    for group in item_idx_groups:
+                        valid_group = [item for item in group if 0 <= item < b.shape[-1]]
+                        if valid_group:
+                            item_masks.append(b[:, :, :, valid_group].mean(dim=-1))
+                        else:
+                            item_masks.append(
+                                torch.zeros(b.shape[0], b.shape[1], b.shape[2], dtype=b.dtype, device=b.device)
+                            )
+                    b = torch.stack(item_masks, dim=-1).mean(dim=1)
+                    masks_at_size.append(b)
+            if masks_at_size:
+                cross_masks[used_layer_size] = torch.stack(masks_at_size, dim=0).mean(dim=0)
+
+        missing_sizes = [size for size in used_layer_sizes if size not in cross_masks]
+        if missing_sizes:
+            available_sizes = sorted({int(a.shape[-2] ** 0.5) for a in attn_probs_cross if a is not None})
             raise RuntimeError(
-                f"No cross-attention maps found for used_layer_size={used_layer_size} "
-                f"(target HW={used_layer_size * used_layer_size}). "
-                f"Available attention HW sizes: {available_sizes}"
+                f"No cross-attention maps found for layer sizes {missing_sizes}. "
+                f"Available selected layer sizes: {available_sizes}"
             )
-        cross_mask = torch.stack(cross_mask, dim=0).mean(dim=0)
+        if used_layer_sizes:
+            cross_mask = cross_masks[used_layer_sizes[0]]
     elif extra_input is not None and 'return_origin_cross' in extra_input and extra_input['return_origin_cross']:
         cross_mask = []
+        used_layer_size = used_layer_sizes[0] if used_layer_sizes else 0
         for a in attn_probs_cross:
             if a is not None and a.shape[-2] == used_layer_size * used_layer_size:
                 cross_mask.append(a)  # (b*2,head,h_w,c)
@@ -384,7 +397,7 @@ def unet_asyn_forward(
             return (sample,)
         return UNet2DConditionOutput(sample=sample)
     else:
-        extra_inf = {'cross_mask': cross_mask}
+        extra_inf = {'cross_mask': cross_mask, 'cross_masks': cross_masks}
         if not return_dict:
             return (sample,), extra_inf
         return UNet2DConditionOutput(sample=sample), extra_inf

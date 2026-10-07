@@ -106,6 +106,7 @@ def get_default_config():
     sample.attn_grid_every = 5
     sample.attn_grid_cell_size = 192
     sample.attn_grid_dir = "attn_grids"
+    sample.attn_mask_threshold_type = "mean"  # mean / robust
 
     ###### Fine-tuning ######
     config.finetune = finetune = ml_collections.ConfigDict()
@@ -125,6 +126,8 @@ def get_default_config():
     finetune.use_ltg = False
     finetune.mask_source = "dataset"  # dataset / attention
     finetune.item_idx_file = ""
+    finetune.attn_mask_threshold_type = "robust"  # mean / robust
+    # Kept for compatibility with existing configs; attention-mask training now fuses 16x16 and 32x32 maps.
     finetune.attn_mask_used_layer_size = 16
     finetune.type = FinetuneType.Asyn
     finetune.item_k = 0.7
@@ -141,8 +144,13 @@ def get_default_config():
 
     ###### Logging ######
     config.logging = logging = ml_collections.ConfigDict()
-    logging.epoch = 5
     logging.eval_epoch = 2
+    logging.metrics_epoch = 0  # 0 disables metric evaluation
+    logging.metrics_datasets = ["animal", "drawbench"]
+    logging.metrics_samples_per_prompt = 1
+    logging.metrics_clip_model = "openai/clip-vit-large-patch14"
+    logging.metrics_qwen_model = "Qwen/Qwen2.5-VL-7B-Instruct"
+    logging.metrics_device = "auto"
 
     ###### Heatmap Parameters ######
     config.heatmap = heatmap = ml_collections.ConfigDict()
@@ -150,6 +158,29 @@ def get_default_config():
     heatmap.every_k = 5
 
     return config
+
+
+def configure_metrics_logging(config, args):
+    defaults = get_default_config().logging
+    if "logging" not in config:
+        config.logging = defaults
+    for key in ("metrics_epoch", "metrics_datasets", "metrics_samples_per_prompt",
+                "metrics_clip_model", "metrics_qwen_model", "metrics_device"):
+        value = getattr(args, key)
+        if value is not None:
+            config.logging[key] = value
+        elif key not in config.logging:
+            config.logging[key] = defaults[key]
+
+    if config.logging.metrics_epoch < 0:
+        raise ValueError("metrics_epoch must be nonnegative (0 disables metric evaluation)")
+    from metrics.gen_images import get_samples_per_prompt
+
+    get_samples_per_prompt(config)
+    if config.logging.metrics_epoch:
+        from finetuning.metrics import get_metrics_datasets
+
+        config.logging.metrics_datasets = get_metrics_datasets(config)
 
 
 def get_config():
@@ -178,6 +209,11 @@ def get_config():
     parser.add_argument("--save_attn_grids", "--save_cross_attention_grids", type=int, default=0)
     parser.add_argument("--attn_grid_every", "--cross_attention_grid_every", type=int, default=5)
     parser.add_argument("--attn_grid_cell_size", type=int, default=192)
+    parser.add_argument(
+        "--sample_attn_mask_threshold_type",
+        choices=["mean", "robust"],
+        default="mean",
+    )
 
     # config.finetune args
     parser.add_argument("--finetune_dataset_dir", "--dataset_dir", "--dataset", type=str,
@@ -195,6 +231,12 @@ def get_config():
     parser.add_argument("--finetune_use_ltg", "--use_ltg", type=int, default=0)
     parser.add_argument("--finetune_mask_source", type=str, default="dataset")
     parser.add_argument("--finetune_items_file", "--finetune_item_idx_file", type=str, default="")
+    parser.add_argument(
+        "--finetune_attn_mask_threshold_type",
+        "--attn_mask_threshold_type",
+        choices=["mean", "robust"],
+        default="mean",
+    )
     parser.add_argument("--finetune_attn_mask_used_layer_size", "--attn_mask_used_layer_size", type=int, default=16)
     parser.add_argument("--finetune_ltg_loc", "--ltg_loc", type=float, default=0.5)
     parser.add_argument("--finetune_ltg_scale", "--ltg_scale", type=float, default=1.0)
@@ -209,12 +251,25 @@ def get_config():
     # config.logging args
     parser.add_argument("--log_epoch", type=int, default=5)
     parser.add_argument("--eval_epoch", type=int, default=2)
+    parser.add_argument("--metrics_epoch", type=int, default=None,
+                        help="Compute CLIP and Qwen after every N completed epochs; 0 disables (default)")
+    parser.add_argument("--metrics_datasets", nargs="+", default=None,
+                        help="Validation prompt sets from config/prompt, e.g. animal drawbench coyo_test")
+    parser.add_argument("--metrics_samples_per_prompt", "--samples_per_prompt", type=int, default=None,
+                        help="Images per prompt for metrics, generated in successive full passes (default: 1)")
+    parser.add_argument("--metrics_clip_model", type=str, default=None,
+                        help="CLIP model ID or local model directory")
+    parser.add_argument("--metrics_qwen_model", type=str, default=None,
+                        help="Qwen model ID or local model directory")
+    parser.add_argument("--metrics_device", type=str, default=None,
+                        help="Device for metric models: auto (training device), cpu, cuda:0, ...")
 
     args = parser.parse_args()
     if args.config_path is not None:
-        with open("config.json", "r") as f:
+        with open(args.config_path, "r", encoding="utf-8") as f:
             loaded_dict = json.load(f)
         loaded_config = ml_collections.ConfigDict(loaded_dict)
+        configure_metrics_logging(loaded_config, args)
         save_config(loaded_config)
         return loaded_config
 
@@ -239,6 +294,7 @@ def get_config():
     config.sample.save_attn_grids = bool(args.save_attn_grids)
     config.sample.attn_grid_every = args.attn_grid_every
     config.sample.attn_grid_cell_size = args.attn_grid_cell_size
+    config.sample.attn_mask_threshold_type = args.sample_attn_mask_threshold_type
     config.prompt_file = args.prompt_file
     config.item_idx_file = args.items_file
     if args.mask_thr is not None:
@@ -273,6 +329,7 @@ def get_config():
     if config.finetune.mask_source not in ["dataset", "attention"]:
         raise ValueError(f"Unknown finetune_mask_source: {args.finetune_mask_source}")
     config.finetune.item_idx_file = args.finetune_items_file
+    config.finetune.attn_mask_threshold_type = args.finetune_attn_mask_threshold_type
     config.finetune.attn_mask_used_layer_size = args.finetune_attn_mask_used_layer_size
     config.finetune.ltg.loc = args.finetune_ltg_loc
     config.finetune.ltg.scale = args.finetune_ltg_scale
@@ -293,8 +350,8 @@ def get_config():
         raise ValueError(f'Unknown schedule_warmup type: {args.finetune_warmup_type}')
 
     # config.logging args
-    config.logging.epoch = args.log_epoch
     config.logging.eval_epoch = args.eval_epoch
+    configure_metrics_logging(config, args)
 
     save_config(config)
     return config

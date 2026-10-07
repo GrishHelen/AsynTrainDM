@@ -1,12 +1,15 @@
 import argparse
+import copy
 import json
 import os
 import re
 import sys
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import torch
 from ml_collections import ConfigDict
+from tqdm import tqdm
 
 script_path = os.path.abspath(__file__)
 project_root = os.path.dirname(os.path.dirname(script_path))
@@ -51,7 +54,8 @@ def get_available_datasets() -> Dict[str, str]:
 
 
 def resolve_dataset_type(dataset_type: str) -> str:
-    dataset_type = re.sub(r",\s*k=[^,]+$", "", dataset_type, flags=re.IGNORECASE).strip()
+    dataset_type = dataset_type.split(",", maxsplit=1)[0].strip()
+    dataset_type = re.sub(r"_robust$", "", dataset_type, flags=re.IGNORECASE)
     dataset_map = get_available_datasets()
     resolved_dataset_type = dataset_map.get(dataset_type.lower())
     if resolved_dataset_type is None:
@@ -136,6 +140,7 @@ def apply_attention_grid_options(
         attn_grid_every: Optional[int],
         attn_grid_cell_size: Optional[int],
         mask_thr: Optional[float],
+        attn_mask_threshold_type: Optional[str],
 ):
     config.sample.save_attn_grids = bool(save_attn_grids)
     if attn_grid_every is not None:
@@ -151,6 +156,92 @@ def apply_attention_grid_options(
     if mask_thr is not None:
         config.mask_thr = mask_thr
 
+    if attn_mask_threshold_type is not None:
+        attn_mask_threshold_type = attn_mask_threshold_type.lower()
+        if attn_mask_threshold_type not in {"mean", "robust"}:
+            raise ValueError(
+                f"Unknown attention mask threshold type: {attn_mask_threshold_type!r}. "
+                "Expected 'mean' or 'robust'."
+            )
+        config.sample.attn_mask_threshold_type = attn_mask_threshold_type
+    elif 'attn_mask_threshold_type' not in config.sample:
+        config.sample.attn_mask_threshold_type = "mean"
+
+
+def configure_prompt_set(config: ConfigDict, dataset_type: str):
+    config.prompt = get_dataset_prompts(dataset_type)
+    config.item_idx, config.item_k = get_dataset_items(dataset_type, config.prompt)
+    config.prompt_file = ""
+    config.item_idx_file = ""
+
+
+def get_samples_per_prompt(config, override=None):
+    count = config.get("logging", {}).get("metrics_samples_per_prompt", 1) if override is None else override
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        raise ValueError("metrics_samples_per_prompt must be a positive integer")
+    return count
+
+
+@torch.no_grad()
+def generate_metric_images(config, accelerator, pipeline, img_save_dir, samples_per_prompt=None):
+    from sampling.base import generate_dm, generate_dm_concave
+    from sampling.asyn import generate_asyn
+    from utils.sampling import encode_prompts_list, prepare_encoded_prompts
+    from utils.utils import seed_everything
+
+    count = get_samples_per_prompt(config, samples_per_prompt)
+    prompts = list(config.prompt)
+    if not prompts:
+        raise ValueError("Expected at least one prompt for metric generation")
+    eval_config = copy.deepcopy(config)
+    # This private config does not change the batch size used for visual validation.
+    eval_config.sample.batch_size = 1
+    eval_config.sample.num_batches_per_epoch = 1
+    eval_config.begin_index = 0
+    eval_config.prompt_file = ""
+    eval_config.item_idx_file = ""
+    # Flat indices follow round * num_prompts + prompt_index, not prompt-major order.
+    eval_config.prompt = prompts * count
+    eval_config.item_idx = list(config.item_idx) * count
+    eval_config.item_k = list(config.item_k) * count
+
+    samplers = ["AsynDM"]
+    if config.generate_dm:
+        samplers.insert(0, "DM")
+    if config.generate_dm_concave:
+        samplers.append("dm_concave")
+    output_dir = Path(img_save_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "prompts": prompts, "samples_per_prompt": count, "seed": config.seed,
+        "order": "round_major", "samplers": samplers, "complete": False,
+    }
+    manifest_path = output_dir / "generation.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    pipeline.unet.eval()
+    seed_everything(config.seed)
+    # Separate streams give samplers the same starting noise without reseeding per image.
+    generators = {method: [torch.Generator(device=accelerator.device).manual_seed(config.seed)]
+                  for method in ("DM", "dm_concave", "AsynDM")}
+    negative_embeds = encode_prompts_list(pipeline, accelerator.device, [""])
+    for idx, prompt in enumerate(tqdm(
+            eval_config.prompt, desc="Metric images", disable=not accelerator.is_local_main_process,
+    )):
+        prompt_embeds = prepare_encoded_prompts(eval_config, accelerator, pipeline, prompt, negative_embeds)
+        cross_mask = None
+        if eval_config.generate_dm or eval_config.static_mask:
+            cross_mask = generate_dm(eval_config, accelerator, pipeline, idx, prompt_embeds,
+                                     str(output_dir), generators=generators["DM"])
+        if eval_config.generate_dm_concave:
+            generate_dm_concave(eval_config, accelerator, pipeline, idx, prompt_embeds,
+                                str(output_dir), generators=generators["dm_concave"])
+        generate_asyn(eval_config, accelerator, pipeline, idx, prompt_embeds, cross_mask,
+                      str(output_dir), prompt=prompt, generators=generators["AsynDM"])
+
+    manifest["complete"] = True
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+
 
 def generate_images(
         config_path: str,
@@ -160,7 +251,9 @@ def generate_images(
         attn_grid_every=None,
         attn_grid_cell_size=None,
         mask_thr=None,
+        attn_mask_threshold_type=None,
         asyn_k=None,
+        samples_per_prompt=None,
 ):
     config_path = resolve_config_path(config_path)
     dataset_type = resolve_dataset_type(dataset_type)
@@ -168,38 +261,46 @@ def generate_images(
     exp_name = os.path.basename(exp_dir)
 
     config = json_to_configdict(config_path)
-    config.sample.batch_size = 1
+    samples_per_prompt = get_samples_per_prompt(config, samples_per_prompt)
     config.sample.finetuned_model = resolve_finetuned_model_path(config, exp_dir, exp_name, finetuned_model)
-    apply_attention_grid_options(config, save_attn_grids, attn_grid_every, attn_grid_cell_size, mask_thr)
+    apply_attention_grid_options(
+        config,
+        save_attn_grids,
+        attn_grid_every,
+        attn_grid_cell_size,
+        mask_thr,
+        attn_mask_threshold_type,
+    )
     if asyn_k is not None:
         asyn_k = float(asyn_k)
         if not 0.0 <= asyn_k <= 1.0:
             raise ValueError(f"asyn_k must be in [0, 1], got {asyn_k}")
         config.sample.item_k = asyn_k
 
+    effective_threshold_type = config.sample.get("attn_mask_threshold_type", "mean").lower()
+    output_dataset_name = dataset_type
+    if effective_threshold_type == "robust":
+        output_dataset_name = f"{output_dataset_name}_robust"
+
     effective_item_k = config.sample.get("item_k", None)
     if effective_item_k is None:
-        output_dir_name = dataset_type
+        output_dir_name = output_dataset_name
     else:
-        output_dir_name = f"{dataset_type}, k={float(effective_item_k):g}"
+        output_dir_name = f"{output_dataset_name}, k={float(effective_item_k):g}"
     save_dir = os.path.join(exp_dir, output_dir_name)
     print(f'Generate {output_dir_name}, experiment: {exp_name}')
 
-    from sampling.all import sample_all
     from utils.setup import prepare_accelerator, prepare_pipeline
 
     accelerator = prepare_accelerator(config, save_dir)
     pipeline = prepare_pipeline(config, accelerator, finetuning=False)
 
-    config.prompt = get_dataset_prompts(dataset_type)
-    config.item_idx, config.item_k = get_dataset_items(dataset_type, config.prompt)
-    config.prompt_file = ""
-    config.item_idx_file = ""
+    configure_prompt_set(config, dataset_type)
 
     if config.allow_tf32 and torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
 
-    sample_all(config, accelerator, pipeline, save_dir=None, img_save_dir=save_dir)
+    generate_metric_images(config, accelerator, pipeline, save_dir, samples_per_prompt=samples_per_prompt)
 
 
 def main():
@@ -214,11 +315,15 @@ def main():
                         help=f"Path to the finetuned model checkpoint",
                         )
     parser.add_argument("--save_attn_grids", "--save_cross_attention_grids", type=int, default=0)
-    parser.add_argument("--attn_grid_every", "--cross_attention_grid_every", type=int, default=None)
-    parser.add_argument("--attn_grid_cell_size", type=int, default=None)
-    parser.add_argument("--mask_thr", type=float, default=None)
+    parser.add_argument("--attn_grid_every", "--cross_attention_grid_every", type=int, default=5)
+    parser.add_argument("--attn_grid_cell_size", type=int, default=192)
+    parser.add_argument("--mask_thr", type=float, default=1.0)
+    parser.add_argument("--attn_mask_threshold_type", choices=["mean", "robust"], default="mean",
+                        help="Cross-attention mask construction used by AsynDM inference")
     parser.add_argument("--asyn_k", type=float, default=None,
                         help="Override item_k for all objects during AsynDM inference (0=linear, 1=quadratic)")
+    parser.add_argument("--metrics_samples_per_prompt", "--samples_per_prompt", dest="samples_per_prompt",
+                        type=int, default=None, help="Images per prompt for metrics (config value or 1)")
     args = parser.parse_args()
     generate_images(
         args.config_path,
@@ -228,7 +333,9 @@ def main():
         attn_grid_every=args.attn_grid_every,
         attn_grid_cell_size=args.attn_grid_cell_size,
         mask_thr=args.mask_thr,
+        attn_mask_threshold_type=args.attn_mask_threshold_type,
         asyn_k=args.asyn_k,
+        samples_per_prompt=args.samples_per_prompt,
     )
 
 
